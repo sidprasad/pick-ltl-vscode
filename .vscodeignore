@@ -1,0 +1,24 @@
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+.yarnrc
+vsc-extension-quickstart.md
+**/tsconfig.json
+**/eslint.config.mjs
+**/*.map
+**/*.ts
+**/.vscode-test.*
+
+# Exclude devDependencies (keep @gruhn/regex-utils and prismjs)
+node_modules/@napi-rs/**
+node_modules/@types/**
+node_modules/@vscode/**
+node_modules/eslint/**
+node_modules/mocha/**
+node_modules/sharp/**
+node_modules/typescript/**
+node_modules/typescript-eslint/**
+node_modules/vsce/**
+node_modules/@eslint/**
+node_modules/@typescript-eslint/**

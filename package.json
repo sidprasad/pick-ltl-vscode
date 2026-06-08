@@ -1,0 +1,166 @@
+{
+  "name": "pick-ltl",
+  "displayName": "PICK: LTL Builder",
+  "description": "Generate candidate LTL formulas from an LLM, then refine them by classifying distinguishing traces.",
+  "publisher": "SiddharthaPrasad",
+  "icon": "images/icon.png",
+  "license": "MIT",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sidprasad/pick-ltl-vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/sidprasad/pick-ltl-vscode/issues"
+  },
+  "engines": {
+    "vscode": "^1.95.0",
+    "node": ">=20.18.1"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ltl",
+    "linear temporal logic",
+    "temporal logic",
+    "llm",
+    "human in the loop",
+    "copilot"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pick-ltl-explorer",
+          "title": "PICK LTL Builder",
+          "icon": "$(symbol-event)"
+        }
+      ]
+    },
+    "views": {
+      "pick-ltl-explorer": [
+        {
+          "type": "webview",
+          "id": "pick-ltl.pickView",
+          "name": "LTL Builder",
+          "icon": "$(symbol-event)"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "pick-ltl.reportIssue",
+        "title": "Report an Issue",
+        "category": "PICK LTL Builder"
+      },
+      {
+        "command": "pick-ltl.resetSurveyState",
+        "title": "Clear Local Storage",
+        "category": "PICK LTL Builder"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "pick-ltl.reportIssue",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r"
+      }
+    ],
+    "configuration": {
+      "title": "PICK LTL Builder",
+      "properties": {
+        "pick-ltl.eliminationThreshold": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "description": "Number of negative votes required to eliminate a candidate formula"
+        },
+        "pick-ltl.maxClassifications": {
+          "type": "number",
+          "default": 100,
+          "minimum": 20,
+          "description": "Maximum number of trace classifications before forcing termination"
+        },
+        "pick-ltl.minPositiveVotesToSelect": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "description": "Minimum number of positive votes required before selecting a final formula"
+        },
+        "pick-ltl.maxPairsWithoutProgress": {
+          "type": "number",
+          "default": 2,
+          "minimum": 2,
+          "description": "Maximum number of consecutive trace pairs without eliminating a candidate before forcing termination"
+        },
+        "pick-ltl.maxSuggestedEdgeCases": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 6,
+          "description": "Maximum number of LLM-suggested example traces to surface before analyzer-generated pairs"
+        },
+        "pick-ltl.maxCandidates": {
+          "type": "number",
+          "default": 4,
+          "minimum": 2,
+          "maximum": 10,
+          "description": "Maximum number of LTL candidates to consider (highest confidence scores are selected)"
+        },
+        "pick-ltl.useLLMGeneratedWords": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use LLM-suggested example traces to distinguish candidates before using analyzer-generated pairs"
+        },
+        "pick-ltl.searchTimeoutMs": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 1000,
+          "description": "Timeout (ms) for engine trace-generation calls before surfacing a fallback"
+        },
+        "pick-ltl.surveyPromptEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable the survey prompt after using PICK multiple times"
+        },
+        "pick-ltl.showIssueReportModal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show modal dialog when reporting an issue to remind user to paste clipboard content"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "vendor:copy": "mkdir -p media/vendor && cp node_modules/@sidprasad/ltl-ts/viz/tracerenderer.js media/vendor/tracerenderer.js",
+    "clean": "rm -rf out",
+    "compile": "npm run vendor:copy && tsc -p ./",
+    "package:vsix": "npx vsce package",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run clean && npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test --timeout 8000",
+    "test:analyzer": "npm run clean && npm run compile && mocha --ui tdd --timeout 8000 out/test/ltlAnalyzer.test.js"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.95.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.39.1",
+    "mocha": "^10.7.3",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.3",
+    "vsce": "^2.9.0"
+  },
+  "dependencies": {
+    "@sidprasad/ltl-ts": "file:../ltl-ts"
+  }
+}

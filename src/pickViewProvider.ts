@@ -1,0 +1,1892 @@
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import { PickController, PickState, WordClassification, WordClassificationRecord } from './pickController';
+import { generateLtlFromDescription, PermissionRequiredError, NoModelsAvailableError, ModelNotSupportedError, ModelNotEnabledError, getAvailableChatModels, LtlCandidate } from './ltlService';
+import { logger } from './logger';
+import { createLtlAnalyzer } from './ltlAnalyzer';
+import { openIssueReport } from './issueReporter';
+import { SurveyPrompt } from './surveyPrompt';
+
+interface RegexMatchVerifier {
+  verifyMatch(word: string, pattern: string): boolean;
+}
+
+export function selectEdgeCaseSuggestions(
+  candidates: LtlCandidate[],
+  analyzer: RegexMatchVerifier,
+  maxSuggestions: number
+): string[] {
+  const maxAllowed = Math.min(6, Math.max(0, Math.trunc(maxSuggestions)));
+
+  if (maxAllowed === 0) {
+    logger.info('Skipping LLM-suggested edge cases because user limit is 0.');
+    return [];
+  }
+
+  const allSuggestedWords = candidates
+    .flatMap(candidate => candidate.exampleTraces ?? [])
+    .map(word => word.trim())
+    .filter(word => word.length > 0);
+
+  const uniqueWords = Array.from(new Set(allSuggestedWords));
+
+  const candidateRegexes = Array.from(new Set(candidates.map(candidate => candidate.formula)));
+  const stats = uniqueWords.map((word, index) => {
+    const matches = candidateRegexes.map(regex => analyzer.verifyMatch(word, regex));
+    const matchCount = matches.filter(Boolean).length;
+    const nonMatchCount = matches.length - matchCount;
+    // Create a signature for the match pattern (e.g., "true,false,true" for 3 regexes)
+    const matchSignature = matches.join(',');
+
+    return { word, index, matchCount, nonMatchCount, matchSignature };
+  });
+
+  // Filter out distinguishing words that have the exact same match signature as a previous word
+  // Keep only the first occurrence of each unique match pattern for distinguishing words
+  // But don't filter unmatched or all-matching words
+  const seenDistinguishingSignatures = new Set<string>();
+  const uniqueMatchStats = stats.filter(entry => {
+    // Don't filter unmatched words or words that match all regexes
+    if (entry.matchCount === 0 || entry.nonMatchCount === 0) {
+      return true;
+    }
+    
+    // For distinguishing words, filter duplicates
+    if (seenDistinguishingSignatures.has(entry.matchSignature)) {
+      return false;
+    }
+    seenDistinguishingSignatures.add(entry.matchSignature);
+    return true;
+  });
+
+  const distinguishing = uniqueMatchStats
+    .filter(entry => entry.matchCount > 0 && entry.nonMatchCount > 0)
+    .map(entry => ({
+      word: entry.word,
+      score: Math.min(entry.matchCount, entry.nonMatchCount),
+      index: entry.index
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+
+  const unmatched = uniqueMatchStats.filter(entry => entry.matchCount === 0).sort((a, b) => a.index - b.index);
+
+  const selected: string[] = distinguishing.slice(0, maxAllowed).map(entry => entry.word);
+
+  const remainingSlots = Math.max(0, maxAllowed - selected.length);
+  const unmatchedToInclude = Math.min(2, remainingSlots);
+  selected.push(...unmatched.slice(0, unmatchedToInclude).map(entry => entry.word));
+
+  if (selected.length % 2 === 1) {
+    selected.pop();
+  }
+
+  if (selected.length > 0) {
+    const unmatchedCount = unmatched.slice(0, unmatchedToInclude).length;
+    const distinguishingCount = selected.length - unmatchedCount;
+    logger.info(
+      `Collected ${selected.length} LLM-suggested edge case word(s) to classify first ` +
+      `(distinguishing: ${distinguishingCount}, unmatched: ${unmatchedCount}).`
+    );
+  }
+
+  return selected;
+}
+
+/**
+ * Select the top N candidates by confidence score.
+ * Candidates without confidence scores are treated as having confidence 0 (lowest priority).
+ */
+export function selectTopCandidatesByConfidence(
+  candidates: LtlCandidate[],
+  maxCandidates: number
+): LtlCandidate[] {
+  if (candidates.length <= maxCandidates) {
+    return candidates;
+  }
+
+  // Sort by confidence (descending), treating undefined as 0
+  const sorted = [...candidates].sort((a, b) => {
+    const confA = a.confidence ?? 0;
+    const confB = b.confidence ?? 0;
+    return confB - confA;
+  });
+
+  const selected = sorted.slice(0, maxCandidates);
+  
+  if (selected.length < candidates.length) {
+    logger.info(
+      `Selected top ${selected.length} candidates by confidence from ${candidates.length} valid candidates. ` +
+      `Confidence range: ${selected.map(c => c.confidence ?? 0).join(', ')}`
+    );
+  }
+
+  return selected;
+}
+
+export class PickViewProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = 'pick-ltl.pickView';
+  private view?: vscode.WebviewView;
+  private controller: PickController;
+  private analyzer = createLtlAnalyzer();
+  private renderCache = new Map<string, unknown>();
+  private cancellationTokenSource?: vscode.CancellationTokenSource;
+  private activeHeartbeat?: { stop: () => void };
+  private lastModelDescription?: string;
+  private lastModelId?: string;
+
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly surveyPrompt: SurveyPrompt,
+    private readonly globalState: vscode.Memento
+  ) {
+    this.controller = new PickController();
+  }
+
+  private readonly preferredModelKey = 'pick.preferredModelId';
+
+  private getPreferredModelId(): string | undefined {
+    return this.globalState.get<string>(this.preferredModelKey);
+  }
+
+  private async setPreferredModelId(modelId?: string) {
+    await this.globalState.update(this.preferredModelKey, modelId);
+  }
+
+  public resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    context: vscode.WebviewViewResolveContext,
+    _token: vscode.CancellationToken
+  ) {
+    this.view = webviewView;
+
+    // Keep any options configured during registration (e.g., retainContextWhenHidden)
+    // while enabling scripts and scoping resource loading.
+    webviewView.webview.options = {
+      ...webviewView.webview.options,
+      enableScripts: true,
+      localResourceRoots: [this.extensionUri]
+    };
+
+    webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
+
+    // Handle messages from the webview
+     webviewView.webview.onDidReceiveMessage(async (data) => {
+      switch (data.type) {
+        case 'webviewReady':
+          // Webview is initialized and ready to receive messages
+          logger.info('Webview initialized and ready');
+          await this.checkAvailableModels();
+          break;
+        case 'log':
+          // Forward webview logs to backend logger
+          if (data.level === 'info') {
+            logger.info(`[Webview] ${data.message}`);
+          } else if (data.level === 'warn') {
+            logger.warn(`[Webview] ${data.message}`);
+          } else if (data.level === 'error') {
+            logger.error(`[Webview] ${data.message}`);
+          }
+          break;
+        case 'generateCandidates':
+          // Don't await - run asynchronously so other messages can be processed
+          this.handleGenerateCandidates(data.prompt, data.modelId).catch(error => {
+            logger.error(error, 'Error in handleGenerateCandidates');
+          });
+          break;
+        case 'refineCandidates':
+          // Don't await - run asynchronously so other messages can be processed
+          this.handleRefineCandidates(data.prompt, data.modelId, data.modelChanged, data.previousModelId).catch(error => {
+            logger.error(error, 'Error in handleRefineCandidates');
+          });
+          break;
+        case 'classifyWord':
+          this.handleClassifyWord(data.word, data.classification);
+          break;
+        case 'updateClassification':
+          this.handleUpdateClassification(data.index, data.classification);
+          break;
+        case 'wordEdited':
+          this.handleWordEdited(data.originalWord, data.newWord);
+          break;
+        case 'vote':
+          this.handleVote(data.acceptedWord);
+          break;
+        case 'reset':
+          this.handleReset(data.preserveClassifications);
+          break;
+        case 'requestNextPair':
+          this.handleRequestNextPair();
+          break;
+        case 'copy':
+          try {
+            await this.copyToClipboard(data.regex || '');
+            this.sendMessage({ type: 'copied', regex: data.regex });
+          } catch (error) {
+            logger.error(error, 'Failed to copy to clipboard');
+            this.sendMessage({ type: 'error', message: 'Failed to copy to clipboard' });
+          }
+          break;
+        case 'submitExamples':
+          await this.handleSubmitExamples(data.acceptWords, data.rejectWords);
+          break;
+        case 'cancel':
+          this.handleCancel();
+          break;
+        case 'checkModels':
+          await this.checkAvailableModels();
+          break;
+        case 'modelSelected':
+          await this.setPreferredModelId(data.modelId);
+          break;
+        case 'reportIssue':
+          try {
+            await openIssueReport();
+          } catch (error) {
+            logger.error(error, 'Failed to open issue report');
+            this.sendMessage({ type: 'error', message: 'Failed to open issue report' });
+          }
+          break;
+        case 'loadSession':
+          this.handleLoadSession(data.data).catch(error => {
+            logger.error(error, 'Error in handleLoadSession');
+          });
+          break;
+      }
+    });
+  }
+
+  /**
+   * Check if language models are available and notify the webview
+   */
+  private async checkAvailableModels() {
+    try {
+      const models = await getAvailableChatModels();
+      const preferredModelId = this.getPreferredModelId();
+
+      if (models.length === 0) {
+        logger.warn('No language models available on startup');
+        this.sendMessage({
+          type: 'noModelsAvailable',
+          message: 'No language models available. Please ensure you have a language model extension installed (e.g., GitHub Copilot) and that you are signed in.'
+        });
+      } else {
+        logger.info(`Found ${models.length} available language model(s): ${models.map(m => m.name).join(', ')}`);
+        const availableIds = models.map(m => m.id);
+        const selectedModelId = (preferredModelId && availableIds.includes(preferredModelId))
+          ? preferredModelId
+          : models[0].id;
+        await this.setPreferredModelId(selectedModelId);
+
+        this.sendMessage({
+          type: 'modelsAvailable',
+          models: models,
+          preferredModelId: selectedModelId
+        });
+      }
+    } catch (error) {
+      logger.warn(`Failed to check available models: ${error}`);
+      // Don't show an error here - the user will see it when they try to generate
+    }
+  }
+
+  /**
+   * Build a friendly description of the model being used so we can surface it in UI status updates
+   */
+  private async getModelDescription(modelId?: string): Promise<string | null> {
+    try {
+      const models = await getAvailableChatModels();
+      if (models.length === 0) {
+        return null;
+      }
+
+      const preferred = modelId ? models.find(m => m.id === modelId) : undefined;
+      const model = preferred ?? models[0];
+      const vendorPart = model.vendor ? ` from ${model.vendor}` : '';
+      const familyPart = model.family ? ` (${model.family})` : '';
+      return `${model.name}${familyPart}${vendorPart}`;
+    } catch (error) {
+      logger.warn(`Unable to describe model for status message: ${error}`);
+      return null;
+    }
+  }
+
+  private collectEdgeCaseSuggestions(candidates: LtlCandidate[]): string[] {
+    const config = vscode.workspace.getConfiguration('pick-ltl');
+    const maxSuggestions = config.get<number>('maxSuggestedEdgeCases', 2);
+
+    return selectEdgeCaseSuggestions(candidates, this.analyzer, maxSuggestions);
+  }
+
+  private collectPositiveExamplesForRefinement(wordHistory: WordClassificationRecord[]): string[] {
+    const MAX_EXAMPLES = 6;
+    const MAX_TOTAL_CHARS = 240;
+    const MAX_EXAMPLE_LENGTH = 80;
+
+    const normalize = (records: WordClassificationRecord[]) =>
+      records
+        .filter(record => record.classification === WordClassification.ACCEPT)
+        .map(record => ({ ...record, word: record.word.trim() }))
+        .filter(record => record.word.length > 0)
+        .sort((a, b) => b.timestamp - a.timestamp);
+
+    const directAccepts = normalize(wordHistory.filter(record => record.source === 'direct'));
+    const pairAccepts = normalize(wordHistory.filter(record => record.source !== 'direct'));
+
+    const examples: string[] = [];
+    const seen = new Set<string>();
+    let totalChars = 0;
+
+    const tryAddExamples = (records: WordClassificationRecord[]) => {
+      for (const record of records) {
+        if (examples.length >= MAX_EXAMPLES || totalChars >= MAX_TOTAL_CHARS) {
+          return;
+        }
+
+        const word = record.word;
+        if (seen.has(word)) {
+          continue;
+        }
+
+        if (word.length > MAX_EXAMPLE_LENGTH) {
+          logger.info(
+            `Skipping positive example longer than ${MAX_EXAMPLE_LENGTH} characters to avoid bloating the prompt: "${word}".`
+          );
+          continue;
+        }
+
+        if (totalChars + word.length > MAX_TOTAL_CHARS) {
+          logger.info(
+            `Skipping positive example to stay within prompt size limit (${MAX_TOTAL_CHARS} chars total): "${word}".`
+          );
+          return;
+        }
+
+        seen.add(word);
+        examples.push(word);
+        totalChars += word.length;
+      }
+    };
+
+    // Prefer user-provided direct examples, then fall back to pair-based accepts.
+    tryAddExamples(directAccepts);
+    tryAddExamples(pairAccepts);
+
+    return examples;
+  }
+
+  private async handleGenerateCandidates(prompt: string, modelId?: string) {
+    try {
+      this.sendMessage({ type: 'clearWarnings' });
+
+      const modelDescription = await this.getModelDescription(modelId);
+      this.lastModelDescription = modelDescription ?? undefined;
+      this.lastModelId = modelId;
+      const statusMessage = modelDescription
+        ? `Asking ${modelDescription} to propose candidate formulas...`
+        : 'Asking your language model to propose candidate formulas...';
+      this.sendMessage({ type: 'status', message: statusMessage });
+
+      // While VS Code surfaces some LLM activity in the UI, the webview does not receive those updates.
+      // Send periodic heartbeats so users see that the model is still working when responses take longer.
+      const heartbeat = this.startModelHeartbeat(
+        modelDescription
+          ? `Waiting for ${modelDescription} to respond with candidates...`
+          : 'Waiting for your language model to respond with candidates...'
+      );
+
+      // Generate candidate formulas using LLM
+      // Dispose any existing cancellation token
+      if (this.cancellationTokenSource) {
+        this.cancellationTokenSource.dispose();
+      }
+      this.cancellationTokenSource = new vscode.CancellationTokenSource();
+
+      let candidates: LtlCandidate[] = [];
+      let warnings: string[] = [];
+      try {
+        await this.analyzer.init();
+        const result = await generateLtlFromDescription(prompt, this.cancellationTokenSource.token, modelId);
+        candidates = result.candidates;
+        warnings = result.warnings ?? [];
+        logger.info(`Generated ${candidates.length} candidates from LLM`);
+
+        // Log each candidate with explanation
+        result.candidates.forEach((c, i) => {
+          logger.info(`Candidate ${i + 1}: ${c.formula} (confidence: ${c.confidence ?? 'N/A'}) - ${c.explanation}`);
+        });
+      } catch (error) {
+        // Debug logging to see what type of error we're getting
+        logger.info(`Caught error type: ${error?.constructor?.name}, instanceof ModelNotSupportedError: ${error instanceof ModelNotSupportedError}`);
+        
+        // Check if it was cancelled
+        if (this.cancellationTokenSource.token.isCancellationRequested) {
+          logger.info('Candidate generation was cancelled by user');
+          this.sendMessage({
+            type: 'cancelled',
+            message: 'Operation cancelled by user.'
+          });
+          return;
+        }
+
+        // Handle specific error types
+        if (error instanceof PermissionRequiredError) {
+          logger.error(error, 'Permission required for language model access');
+          this.sendMessage({
+            type: 'permissionRequired',
+            message: error.message
+          });
+          return;
+        }
+
+        if (error instanceof NoModelsAvailableError) {
+          logger.error(error, 'No language models available');
+          this.sendMessage({
+            type: 'noModelsAvailable',
+            message: error.message
+          });
+          return;
+        }
+
+        if (error instanceof ModelNotSupportedError) {
+          logger.error(error, 'Model not supported');
+          this.sendMessage({
+            type: 'error',
+            message: error.message
+          });
+          return;
+        }
+
+        if (error instanceof ModelNotEnabledError) {
+          logger.error(error, 'Model not enabled/accessible');
+          this.sendMessage({
+            type: 'error',
+            message: error.message
+          });
+          return;
+        }
+
+        // Check for model_not_supported in error message (fallback if error class doesn't match)
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('model_not_supported') || 
+            errorMessage.toLowerCase().includes('model is not supported')) {
+          logger.error(error, 'Model not supported (detected from message)');
+          const msg = 'The selected model is not currently supported. Please try a different model.';
+          vscode.window.showErrorMessage(msg, 'Select Different Model').then(selection => {
+            if (selection === 'Select Different Model') {
+              this.checkAvailableModels();
+            }
+          });
+          this.sendMessage({
+            type: 'error',
+            message: msg
+          });
+          return;
+        }
+
+        logger.error(error, 'Failed to generate candidate formulas');
+        this.sendMessage({
+          type: 'error',
+          message: 'Could not generate any candidate formulas. Please try again.'
+        });
+        return;
+      } finally {
+        heartbeat.stop();
+      }
+
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled after model responded (before validation)');
+        this.sendMessage({
+          type: 'cancelled',
+          message: 'Operation cancelled by user.'
+        });
+        return;
+      }
+
+      if (candidates.length === 0) {
+        this.sendMessage({
+          type: 'error',
+          message: 'Could not generate any candidate formulas. Please try again.'
+        });
+        return;
+      }
+
+      this.sendMessage({ type: 'status', message: 'Validating model output (syntax checks)...' });
+
+      // Check cancellation before filtering
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled before filtering duplicates');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      // Filter out invalid regexes and regexes with unsupported syntax
+      const validCandidates: LtlCandidate[] = [];
+      for (const candidate of candidates) {
+        const regex = candidate.formula;
+        const isValid = this.analyzer.isValidRegex(regex);
+        if (!isValid) {
+          logger.warn(`Filtered out invalid regex: "${regex}"`);
+          continue;
+        }
+
+        const hasSupported = await this.analyzer.hasSupportedSyntax(regex);
+        if (!hasSupported) {
+          logger.warn(`Filtered out regex with unsupported syntax: "${regex}"`);
+          continue;
+        }
+
+        validCandidates.push(candidate);
+      }
+
+      if (validCandidates.length === 0) {
+        this.sendMessage({ 
+          type: 'error', 
+          message: 'All generated regexes contain invalid or unsupported syntax (e.g., word boundaries \\b, lookbehinds). Please try again.' 
+        });
+        return;
+      }
+
+      if (validCandidates.length < candidates.length) {
+        logger.info(`Filtered out ${candidates.length - validCandidates.length} invalid or unsupported regex(es)`);
+      }
+
+      // Filter out equivalent/duplicate regexes
+      this.sendMessage({ type: 'status', message: 'Filtering duplicate regexes...' });
+      let uniqueCandidates: string[] = [];
+      let equivalenceMap: Map<string, string[]> = new Map();
+      try {
+        const deduped = await this.filterEquivalentRegexes(validCandidates.map(c => c.formula));
+        uniqueCandidates = deduped.uniqueRegexes;
+        equivalenceMap = deduped.equivalenceMap;
+      } catch (error) {
+        const errMsg = String(error);
+        if (this.cancellationTokenSource?.token.isCancellationRequested || errMsg.includes('cancelled')) {
+          logger.info('Duplicate filtering cancelled by user.');
+          this.sendMessage({
+            type: 'cancelled', 
+            message: 'Operation cancelled by user.' 
+          });
+          return;
+        }
+        throw error;
+      }
+      
+      // Check cancellation after filtering
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled after filtering duplicates');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      // Inform user if duplicates were removed
+      if (uniqueCandidates.length < candidates.length) {
+        this.sendMessage({
+          type: 'status',
+          message: `Removed ${candidates.length - uniqueCandidates.length} duplicate regex(es). Proceeding with ${uniqueCandidates.length} unique candidate(s).`
+        });
+      }
+
+      if (uniqueCandidates.length === 0) {
+        this.sendMessage({ 
+          type: 'error', 
+          message: 'All generated formulas were duplicates. Please try again with a different prompt.' 
+        });
+        return;
+      }
+
+      // Build metadata map for unique candidates (use highest confidence for duplicates)
+      const candidateMeta = new Map<string, LtlCandidate>();
+      validCandidates.forEach(candidate => {
+        const existing = candidateMeta.get(candidate.formula);
+        if (!existing || (candidate.confidence ?? 0) > (existing.confidence ?? 0)) {
+          candidateMeta.set(candidate.formula, candidate);
+        }
+      });
+
+      // Select top N candidates by confidence
+      const config = vscode.workspace.getConfiguration('pick-ltl');
+      const maxCandidates = config.get<number>('maxCandidates', 4);
+      const uniqueWithMeta = uniqueCandidates.map(regex => candidateMeta.get(regex)!);
+      const topCandidates = selectTopCandidatesByConfidence(uniqueWithMeta, maxCandidates);
+      const finalCandidateRegexes = topCandidates.map(c => c.formula);
+
+      // Check cancellation before initializing candidates
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled before initializing candidates');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      // Initialize controller with unique candidates
+      this.sendMessage({ type: 'status', message: 'Determining elimination thresholds...' });
+
+      const suggestedWords = this.collectEdgeCaseSuggestions(topCandidates);
+
+      const seeds = finalCandidateRegexes.map(regex => {
+        const meta = candidateMeta.get(regex);
+        return {
+          pattern: regex,
+          explanation: meta?.explanation,
+          confidence: meta?.confidence
+        };
+      });
+
+      // Filter equivalence map to only include selected candidates
+      const filteredEquivalenceMap = new Map<string, string[]>();
+      for (const regex of finalCandidateRegexes) {
+        const equivalents = equivalenceMap.get(regex);
+        if (equivalents) {
+          filteredEquivalenceMap.set(regex, equivalents);
+        }
+      }
+
+      await this.controller.generateCandidates(prompt, seeds, filteredEquivalenceMap, (current, total) => {
+        const percent = Math.round((current / total) * 100);
+        this.sendMessage({ type: 'status', message: `Determining elimination thresholds... ${percent}%` });
+      }, suggestedWords);
+      
+      // Check cancellation before sending results
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled before sending candidates to UI');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      this.sendMessage({
+        type: 'candidatesGenerated',
+        candidates: this.controller.getStatus().candidateDetails
+      });
+
+      this.surfaceModelWarnings(warnings);
+
+      // Check cancellation before generating first pair
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled before generating first word pair');
+        this.sendMessage({
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      // Generate first word pair (or proceed to final result if only 1 candidate)
+      this.handleRequestNextPair();
+      
+    } catch (error) {
+      logger.error(error, 'Error generating candidates');
+      this.sendMessage({
+        type: 'error',
+        message: `Error: ${error}`
+      });
+    }
+  }
+
+  private async handleRequestNextPair() {
+    logger.info('handleRequestNextPair called');
+    try {
+      // Check cancellation at the start
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled in handleRequestNextPair');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      const activeCount = this.controller.getActiveCandidateCount();
+      logger.info(`Active candidates: ${activeCount}`);
+      
+      if (activeCount === 0) {
+        // No candidates left - check if we're in a refinement scenario
+        const wordHistory = this.controller.getWordHistory();
+        const hasClassifications = wordHistory.length > 0;
+        
+        logger.warn('No active candidates remaining, cannot generate next pair');
+        
+        if (hasClassifications) {
+          // This happened after re-applying classifications during refinement
+          this.sendMessage({ 
+            type: 'noRegexFound',
+            message: `All ${this.controller.getStatus().totalCandidates} candidate formulas were eliminated after re-applying your ${wordHistory.length} previous classification${wordHistory.length === 1 ? '' : 's'}. Try revising your prompt or starting fresh.`,
+            candidateDetails: this.controller.getStatus().candidateDetails,
+            wordsIn: wordHistory.filter(r => r.classification === 'accept').map(r => r.word),
+            wordsOut: wordHistory.filter(r => r.classification === 'reject').map(r => r.word),
+            wordHistory,
+            historyRenderData: await this.buildHistoryRenderData(wordHistory.map(r => r.word))
+          });
+        } else {
+          // This is an unexpected error with no classifications
+          this.sendMessage({ 
+            type: 'error', 
+            message: 'No active candidates remaining. Please try generating candidates again.' 
+          });
+        }
+        return;
+      }
+
+      logger.info('Calling controller.generateNextPair()');
+      const pair = await this.controller.generateNextPair();
+      const status = this.controller.getStatus();
+      
+      logger.info(`Generated pair: word1="${pair.word1}" (length: ${pair.word1.length}), word2="${pair.word2}" (length: ${pair.word2.length})`);
+      
+      // Check cancellation before sending pair to UI
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled after generating pair, before sending to UI');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      logger.info('Sending newPair message to webview');
+      const renderData = {
+        word1: await this.analyzer.renderData(pair.word1),
+        word2: await this.analyzer.renderData(pair.word2)
+      };
+      const historyRenderData = await this.buildHistoryRenderData(status.wordHistory.map(r => r.word));
+      this.sendMessage({
+        type: 'newPair',
+        pair,
+        status,
+        matches: this.getPairMatches(pair, status),
+        renderData,
+        historyRenderData
+      });
+      logger.info('handleRequestNextPair completed successfully');
+    } catch (error) {
+      logger.error(error, 'Error generating next pair');
+      
+      // Check if the error is about running out of words
+      const errorMessage = String(error);
+      if (errorMessage.includes('Could not generate unique word') || 
+          errorMessage.includes('Failed to generate') ||
+          errorMessage.includes('Exhausted word space')) {
+        // We ran out of words - show best candidates so far
+        const status = this.controller.getStatus();
+        const activeCandidates = status.candidateDetails.filter(c => !c.eliminated);
+        
+        // Send a single consolidated message about word exhaustion
+        logger.warn(`Insufficient words to continue, ${activeCandidates.length} candidates remain`);
+        this.sendMessage({
+          type: 'insufficientWords',
+          candidates: activeCandidates,
+          status,
+          message: `Unable to generate more distinguishing words. ${activeCandidates.length} candidate(s) remain.`
+        });
+      } else {
+        // For other errors, send a clean error message
+        const cleanErrorMessage = error instanceof Error ? error.message : String(error);
+        logger.error(`Failed to generate pair: ${cleanErrorMessage}`);
+        this.sendMessage({ 
+          type: 'error', 
+          message: `Error generating pair: ${cleanErrorMessage}` 
+        });
+      }
+    }
+  }
+
+  /**
+   * Compute which active candidate formulas match each word in the current pair.
+   */
+  private getPairMatches(pair: { word1: string; word2: string }, status: ReturnType<PickController['getStatus']>) {
+    const activeCandidates = status.candidateDetails.filter(c => !c.eliminated);
+    const matchesForWord = (word: string) => 
+      activeCandidates
+        .filter(c => this.analyzer.verifyMatch(word, c.pattern))
+        .map(c => c.pattern);
+
+    return {
+      word1: matchesForWord(pair.word1),
+      word2: matchesForWord(pair.word2)
+    };
+  }
+
+  private async handleClassifyWord(word: string, classification: string) {
+    try {
+      logger.info(`handleClassifyWord called: word="${word}" (length: ${word.length}), classification="${classification}"`);
+      
+      const classificationEnum = classification as WordClassification;
+      this.controller.classifyWord(word, classificationEnum);
+      
+      const state = this.controller.getState();
+      const status = this.controller.getStatus();
+      
+      logger.info(`After classifyWord: state=${state}, activeCandidates=${status.activeCandidates}`);
+      
+      if (state === PickState.FINAL_RESULT) {
+        logger.info('State transitioned to FINAL_RESULT, calling handleFinalResult');
+        await this.handleFinalResult();
+      } else {
+        // Check if both words are classified
+        const bothClassified = this.controller.areBothWordsClassified();
+        logger.info(`Checking areBothWordsClassified: ${bothClassified}`);
+        
+        if (bothClassified) {
+          this.controller.clearCurrentPair();
+          logger.info('Both words classified, clearing current pair and generating next pair');
+          
+          // Send updated status
+          this.sendMessage({
+            type: 'wordClassified',
+            status,
+            bothClassified: true
+          });
+          
+          // Generate next pair
+          this.handleRequestNextPair();
+        } else {
+          logger.info('Only one word classified so far, waiting for second word');
+          // Send updated status but don't generate next pair yet
+          this.sendMessage({
+            type: 'wordClassified',
+            status,
+            bothClassified: false
+          });
+        }
+      }
+    } catch (error) {
+      logger.error(error, 'Error classifying word');
+      this.sendMessage({
+        type: 'error',
+        message: `Error classifying word: ${error}`
+      });
+    }
+  }
+
+  private async handleUpdateClassification(index: number, classification: string) {
+    try {
+      const classificationEnum = classification as WordClassification;
+      this.controller.updateClassification(index, classificationEnum);
+
+      const state = this.controller.getState();
+      const status = this.controller.getStatus();
+
+      if (state === PickState.FINAL_RESULT) {
+        await this.handleFinalResult();
+        return;
+      }
+
+      this.sendMessage({
+        type: 'classificationUpdated',
+        status
+      });
+
+      // If we transitioned back to VOTING, generate a new pair
+      if (state === PickState.VOTING && status.activeCandidates > 0) {
+        const currentPair = this.controller.getCurrentPair();
+        if (!currentPair) {
+          // No current pair - we just transitioned back to voting, generate a new pair
+          logger.info('No current pair after state transition, generating new pair');
+          this.handleRequestNextPair();
+        } else {
+          // There's a current pair - only generate next if both words are classified
+          const bothClassified = this.controller.areBothWordsClassified();
+          if (bothClassified) {
+            this.handleRequestNextPair();
+          } else {
+            logger.info('Only one word classified after update, waiting for second word');
+          }
+        }
+      }
+    } catch (error) {
+      logger.error(error, 'Error updating classification');
+      this.sendMessage({
+        type: 'error',
+        message: `Error updating classification: ${error}`
+      });
+    }
+  }
+
+  /**
+   * Apply user-provided examples outside the current word pair flow.
+   */
+  private async handleSubmitExamples(acceptWords: string[] = [], rejectWords: string[] = []) {
+    try {
+      const normalizedAccept = this.normalizeExampleWords(acceptWords);
+      const normalizedReject = this.normalizeExampleWords(rejectWords);
+
+      const conflicts = normalizedAccept.filter(word => normalizedReject.includes(word));
+      if (conflicts.length > 0) {
+        this.sendMessage({
+          type: 'examplesRejected',
+          message: `The same word appears in both lists: ${conflicts.join(', ')}. Remove duplicates and try again.`
+        });
+        return;
+      }
+
+      const combined = [
+        ...normalizedAccept.map(word => ({ word, classification: WordClassification.ACCEPT })),
+        ...normalizedReject.map(word => ({ word, classification: WordClassification.REJECT }))
+      ];
+
+      if (combined.length === 0) {
+        this.sendMessage({
+          type: 'examplesRejected',
+          message: 'Add at least one example that should match or should not match.'
+        });
+        return;
+      }
+
+      const maxExamples = 12;
+      const limited = combined.slice(0, maxExamples);
+      const truncated = combined.length - limited.length;
+
+      const applied = this.controller.classifyDirectWords(limited);
+      logger.info(`Applied ${applied} direct classification(s) from user-provided examples.`);
+
+      const state = this.controller.getState();
+      const status = this.controller.getStatus();
+
+      this.sendMessage({
+        type: 'examplesApplied',
+        status,
+        acceptCount: limited.filter(entry => entry.classification === WordClassification.ACCEPT).length,
+        rejectCount: limited.filter(entry => entry.classification === WordClassification.REJECT).length,
+        truncated
+      });
+
+      if (state === PickState.FINAL_RESULT) {
+        await this.handleFinalResult();
+      }
+    } catch (error) {
+      logger.error(error, 'Error applying custom examples');
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.sendMessage({
+        type: 'error',
+        message: `Error applying your examples: ${errorMessage}`
+      });
+    }
+  }
+
+  /**
+   * Normalize user-provided examples by trimming whitespace and removing duplicates.
+   */
+  private normalizeExampleWords(words: unknown): string[] {
+    if (!Array.isArray(words)) {
+      return [];
+    }
+
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+
+    for (const entry of words) {
+      if (typeof entry !== 'string') {
+        continue;
+      }
+      const word = entry.trim();
+      if (word.length === 0 || seen.has(word)) {
+        continue;
+      }
+      seen.add(word);
+      normalized.push(word);
+    }
+
+    return normalized;
+  }
+
+  /**
+   * Load a previously exported session from JSON data
+   */
+  private async handleLoadSession(data: any) {
+    try {
+      logger.info('Loading session from exported JSON');
+      
+      // Validate the data structure
+      if (!data || typeof data !== 'object') {
+        this.sendMessage({
+          type: 'error',
+          message: 'Invalid session data: not an object'
+        });
+        return;
+      }
+
+      if (!Array.isArray(data.candidates) || data.candidates.length === 0) {
+        this.sendMessage({
+          type: 'error',
+          message: 'Invalid session data: candidates must be a non-empty array'
+        });
+        return;
+      }
+
+      if (!Array.isArray(data.classifications)) {
+        this.sendMessage({
+          type: 'error',
+          message: 'Invalid session data: classifications must be an array'
+        });
+        return;
+      }
+
+      // Extract prompt and modelId if present
+      const loadedPrompt = typeof data.prompt === 'string' ? data.prompt : '';
+      const loadedModelId = typeof data.modelId === 'string' ? data.modelId : '';
+
+      // Extract candidates
+      const candidatePatterns: Array<{ pattern: string; explanation?: string; confidence?: number }> = [];
+      const equivalenceMap = new Map<string, string[]>();
+
+      for (const candidate of data.candidates) {
+        if (!candidate.formula || typeof candidate.formula !== 'string') {
+          logger.warn('Skipping candidate with missing or invalid regex');
+          continue;
+        }
+
+        candidatePatterns.push({
+          pattern: candidate.formula,
+          explanation: candidate.explanation || undefined,
+          confidence: typeof candidate.confidence === 'number' ? candidate.confidence : undefined
+        });
+
+        // Store equivalents if present
+        if (Array.isArray(candidate.equivalents) && candidate.equivalents.length > 0) {
+          equivalenceMap.set(candidate.formula, candidate.equivalents);
+        }
+      }
+
+      if (candidatePatterns.length === 0) {
+        this.sendMessage({
+          type: 'error',
+          message: 'No valid candidate formulas found in session data'
+        });
+        return;
+      }
+
+      // Convert classification format from export ('in'/'out'/'unsure') to internal format
+      const normalizeClassification = (classification: string): WordClassification => {
+        const normalized = (classification || '').toLowerCase();
+        if (normalized === 'in') { return WordClassification.ACCEPT; }
+        if (normalized === 'out') { return WordClassification.REJECT; }
+        return WordClassification.UNSURE;
+      };
+
+      const classifications: Array<{ word: string; classification: WordClassification }> = [];
+      
+      for (const item of data.classifications) {
+        if (!item.word || typeof item.word !== 'string') {
+          logger.warn('Skipping classification with missing or invalid word');
+          continue;
+        }
+
+        classifications.push({
+          word: item.word,
+          classification: normalizeClassification(item.classification)
+        });
+      }
+
+      // Reset controller and generate candidates
+      this.controller.reset(false);
+      this.sendMessage({ type: 'status', message: 'Loading session...' });
+
+      // Ensure the provider's analyzer is loaded before the synchronous
+      // verifyMatch calls reached via handleRequestNextPair/getPairMatches.
+      await this.analyzer.init();
+
+      // Use the loaded prompt if available, otherwise use a default
+      const promptToUse = loadedPrompt || 'Loaded session';
+
+      await this.controller.generateCandidates(
+        promptToUse,
+        candidatePatterns,
+        equivalenceMap
+      );
+
+      logger.info(`Generated ${candidatePatterns.length} candidates from loaded session`);
+
+      // Apply all classifications (this also marks words as used via applyClassification)
+      if (classifications.length > 0) {
+        this.sendMessage({ type: 'status', message: `Applying ${classifications.length} classification(s)...` });
+        const applied = this.controller.classifyDirectWords(classifications);
+        logger.info(`Applied ${applied} classification(s) from loaded session`);
+      }
+
+      const state = this.controller.getState();
+      const status = this.controller.getStatus();
+
+      this.sendMessage({
+        type: 'sessionLoaded',
+        status,
+        candidateCount: candidatePatterns.length,
+        classificationCount: classifications.length,
+        prompt: loadedPrompt || undefined,
+        modelId: loadedModelId || undefined
+      });
+
+      // If we reached final state, handle it
+      if (state === PickState.FINAL_RESULT) {
+        await this.handleFinalResult();
+      } else {
+        // Show the voting view
+        this.sendMessage({ type: 'showVoting' });
+        
+        // Generate next pair to start voting
+        this.handleRequestNextPair();
+      }
+
+    } catch (error) {
+      logger.error(error, 'Error loading session');
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.sendMessage({
+        type: 'error',
+        message: `Error loading session: ${errorMessage}`
+      });
+    }
+  }
+
+  /**
+   * Handle word edit in the current voting pair
+   */
+  private handleWordEdited(originalWord: string, newWord: string) {
+    try {
+      logger.info(`Word edited: "${originalWord}" -> "${newWord}"`);
+      this.controller.updateWordInPair(originalWord, newWord);
+    } catch (error) {
+      logger.error(error, 'Error updating word in pair');
+      // Don't send an error message to the UI since the edit already happened in the frontend.
+      // If the original word isn't found in the current pair, the update is silently ignored
+      // and the backend will use whichever word is actually in the pair when classification happens.
+      // This handles edge cases where the pair might have changed between edit and vote.
+    }
+  }
+
+  private async handleVote(acceptedWord: string) {
+    try {
+      this.controller.processVote(acceptedWord);
+      
+      const state = this.controller.getState();
+      const status = this.controller.getStatus();
+      
+      if (state === PickState.FINAL_RESULT) {
+        await this.handleFinalResult();
+      } else {
+        // Send updated status
+        this.sendMessage({
+          type: 'voteProcessed',
+          status
+        });
+        
+        // Generate next pair
+        this.handleRequestNextPair();
+      }
+    } catch (error) {
+      logger.error(error, 'Error processing vote');
+      this.sendMessage({
+        type: 'error',
+        message: `Error processing vote: ${error}`
+      });
+    }
+  }
+
+  private async handleFinalResult() {
+    try {
+      const finalRegex = this.controller.getFinalRegex();
+      
+      // Get the actual words the user classified
+      const wordHistory = this.controller.getWordHistory();
+      const wordsIn = wordHistory
+        .filter(record => record.classification === 'accept')
+        .map(record => record.word);
+      const wordsOut = wordHistory
+        .filter(record => record.classification === 'reject')
+        .map(record => record.word);
+      
+      if (finalRegex === null) {
+        // All candidates were eliminated - none are correct
+        this.sendMessage({
+          type: 'noRegexFound',
+          message: 'No candidate formulas match your requirements.',
+          candidateDetails: this.controller.getStatus().candidateDetails,
+          wordsIn,
+          wordsOut,
+          wordHistory,
+          historyRenderData: await this.buildHistoryRenderData(wordHistory.map(r => r.word))
+        });
+
+        // Track usage completion and potentially show survey prompt
+        await this.surveyPrompt.incrementUsageAndCheckPrompt();
+        
+        return;
+      }
+      
+      // Get status to send along with the final result
+      const status = this.controller.getStatus();
+      
+      // Safety check: should never send finalResult with null regex
+      if (finalRegex === null) {
+        logger.error(new Error('Attempted to send finalResult with null regex'), 'Invalid state');
+        this.sendMessage({
+          type: 'noRegexFound',
+          message: 'No candidate formulas match your requirements.',
+          candidateDetails: status.candidateDetails,
+          wordsIn,
+          wordsOut,
+          wordHistory,
+          historyRenderData: await this.buildHistoryRenderData(wordHistory.map(r => r.word))
+        });
+        await this.surveyPrompt.incrementUsageAndCheckPrompt();
+        return;
+      }
+      
+      this.sendMessage({
+        type: 'finalResult',
+        regex: finalRegex,
+        wordsIn,
+        wordsOut,
+        status,
+        historyRenderData: await this.buildHistoryRenderData(status.wordHistory.map(r => r.word))
+      });
+      
+      // Track usage completion and potentially show survey prompt
+      await this.surveyPrompt.incrementUsageAndCheckPrompt();
+    } catch (error) {
+      logger.error(error, 'Error showing final results');
+      this.sendMessage({
+        type: 'error',
+        message: `Error showing results: ${error}`
+      });
+    }
+  }
+
+  private async handleRefineCandidates(prompt: string, modelId?: string, modelChanged?: boolean, previousModelId?: string) {
+    try {
+      this.sendMessage({ type: 'clearWarnings' });
+
+      // Log revision type
+      if (modelChanged && previousModelId) {
+        const prevModelDesc = await this.getModelDescription(previousModelId);
+        const newModelDesc = await this.getModelDescription(modelId);
+        logger.info(`Revising with MODEL CHANGE: ${prevModelDesc || previousModelId} → ${newModelDesc || modelId}`);
+      } else {
+        logger.info(`Revising with prompt refinement (same model: ${modelId || 'default'})`);
+      }
+
+      const modelDescription = await this.getModelDescription(modelId);
+      this.lastModelDescription = modelDescription ?? undefined;
+      this.lastModelId = modelId;
+      const statusMessage = modelDescription
+        ? `Asking ${modelDescription} to refine your regex candidates...`
+        : 'Asking your language model to refine your regex candidates...';
+      this.sendMessage({ type: 'status', message: statusMessage });
+
+      const heartbeat = this.startModelHeartbeat(
+        modelDescription
+          ? `Waiting for ${modelDescription} to finish refining your candidates...`
+          : 'Waiting for your language model to finish refining your candidates...'
+      );
+
+      // Get session data before refinement
+      const sessionData = this.controller.getSessionData();
+      
+      // Generate new candidate formulas using LLM
+      // Dispose any existing cancellation token
+      if (this.cancellationTokenSource) {
+        this.cancellationTokenSource.dispose();
+      }
+      this.cancellationTokenSource = new vscode.CancellationTokenSource();
+
+      const positiveExamples = this.collectPositiveExamplesForRefinement(sessionData.wordHistory);
+      if (positiveExamples.length > 0) {
+        logger.info(`Including ${positiveExamples.length} positive example(s) in refinement prompt.`);
+      }
+
+      let candidates: LtlCandidate[] = [];
+      let warnings: string[] = [];
+      try {
+        await this.analyzer.init();
+        const result = await generateLtlFromDescription(prompt, this.cancellationTokenSource.token, modelId, {
+          positiveExamples
+        });
+        candidates = result.candidates;
+        warnings = result.warnings ?? [];
+        logger.info(`Generated ${candidates.length} candidates from LLM for refinement`);
+
+        // Log each candidate with explanation
+        result.candidates.forEach((c, i) => {
+          logger.info(`Candidate ${i + 1}: ${c.formula} (confidence: ${c.confidence ?? 'N/A'}) - ${c.explanation}`);
+        });
+      } catch (error) {
+        // Check if it was cancelled
+        if (this.cancellationTokenSource.token.isCancellationRequested) {
+          logger.info('Candidate refinement was cancelled by user');
+          this.sendMessage({
+            type: 'cancelled',
+            message: 'Operation cancelled by user.'
+          });
+          return;
+        }
+
+        // Handle specific error types
+        if (error instanceof PermissionRequiredError) {
+          logger.error(error, 'Permission required for language model access');
+          this.sendMessage({
+            type: 'permissionRequired',
+            message: error.message
+          });
+          return;
+        }
+
+        if (error instanceof NoModelsAvailableError) {
+          logger.error(error, 'No language models available');
+          this.sendMessage({
+            type: 'noModelsAvailable',
+            message: error.message
+          });
+          return;
+        }
+
+        if (error instanceof ModelNotSupportedError) {
+          logger.error(error, 'Model not supported');
+          this.sendMessage({
+            type: 'error',
+            message: error.message
+          });
+          return;
+        }
+
+        if (error instanceof ModelNotEnabledError) {
+          logger.error(error, 'Model not enabled/accessible');
+          this.sendMessage({
+            type: 'error',
+            message: error.message
+          });
+          return;
+        }
+
+        // Check for model_not_supported in error message (fallback if error class doesn't match)
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('model_not_supported') || 
+            errorMessage.toLowerCase().includes('model is not supported')) {
+          logger.error(error, 'Model not supported (detected from message)');
+          const msg = 'The selected model is not currently supported. Please try a different model.';
+          vscode.window.showErrorMessage(msg, 'Select Different Model').then(selection => {
+            if (selection === 'Select Different Model') {
+              this.checkAvailableModels();
+            }
+          });
+          this.sendMessage({
+            type: 'error',
+            message: msg
+          });
+          return;
+        }
+
+        logger.error(error, 'Failed to generate candidate formulas during refinement');
+        this.sendMessage({
+          type: 'error',
+          message: 'Could not generate any candidate formulas. Please try again.'
+        });
+        return;
+      } finally {
+        heartbeat.stop();
+      }
+
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled after model responded (refinement, before validation)');
+        this.sendMessage({
+          type: 'cancelled',
+          message: 'Operation cancelled by user.'
+        });
+        return;
+      }
+
+      if (candidates.length === 0) {
+        this.sendMessage({
+          type: 'error',
+          message: 'Could not generate any candidate formulas. Please try again.'
+        });
+        return;
+      }
+
+      this.sendMessage({ type: 'status', message: 'Validating model output (syntax checks)...' });
+
+      // Check cancellation before filtering
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled before filtering duplicates (refinement)');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      // Filter out invalid regexes and regexes with unsupported syntax
+      const validCandidates: LtlCandidate[] = [];
+      for (const candidate of candidates) {
+        const regex = candidate.formula;
+        const isValid = this.analyzer.isValidRegex(regex);
+        if (!isValid) {
+          logger.warn(`Filtered out invalid regex: "${regex}"`);
+          continue;
+        }
+
+        const hasSupported = await this.analyzer.hasSupportedSyntax(regex);
+        if (!hasSupported) {
+          logger.warn(`Filtered out regex with unsupported syntax: "${regex}"`);
+          continue;
+        }
+
+        validCandidates.push(candidate);
+      }
+
+      if (validCandidates.length === 0) {
+        this.sendMessage({ 
+          type: 'error', 
+          message: 'All generated regexes contain invalid or unsupported syntax (e.g., word boundaries \\b, lookbehinds). Please try again.' 
+        });
+        return;
+      }
+
+      if (validCandidates.length < candidates.length) {
+        logger.info(`Filtered out ${candidates.length - validCandidates.length} invalid or unsupported regex(es)`);
+      }
+
+      // Filter out equivalent/duplicate regexes
+      this.sendMessage({ type: 'status', message: 'Filtering duplicate regexes...' });
+      let uniqueCandidates: string[] = [];
+      let equivalenceMap: Map<string, string[]> = new Map();
+      try {
+        const deduped = await this.filterEquivalentRegexes(validCandidates.map(c => c.formula));
+        uniqueCandidates = deduped.uniqueRegexes;
+        equivalenceMap = deduped.equivalenceMap;
+      } catch (error) {
+        const errMsg = String(error);
+        if (this.cancellationTokenSource?.token.isCancellationRequested || errMsg.includes('cancelled')) {
+          logger.info('Duplicate filtering cancelled by user (refinement).');
+          this.sendMessage({
+            type: 'cancelled', 
+            message: 'Operation cancelled by user.' 
+          });
+          return;
+        }
+        throw error;
+      }
+      
+      // Check cancellation after filtering
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled after filtering duplicates (refinement)');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      // Inform user if duplicates were removed
+      if (uniqueCandidates.length < candidates.length) {
+        this.sendMessage({
+          type: 'status',
+          message: `Removed ${candidates.length - uniqueCandidates.length} duplicate regex(es). Proceeding with ${uniqueCandidates.length} unique candidate(s). Preserving ${sessionData.wordHistory.length} existing classifications.`
+        });
+      }
+
+      if (uniqueCandidates.length === 0) {
+        this.sendMessage({ 
+          type: 'error', 
+          message: 'All generated formulas were duplicates. Please try again with a different prompt.' 
+        });
+        return;
+      }
+
+      // Build metadata map for unique candidates (use highest confidence for duplicates)
+      const candidateMeta = new Map<string, LtlCandidate>();
+      validCandidates.forEach(candidate => {
+        const existing = candidateMeta.get(candidate.formula);
+        if (!existing || (candidate.confidence ?? 0) > (existing.confidence ?? 0)) {
+          candidateMeta.set(candidate.formula, candidate);
+        }
+      });
+
+      // Select top N candidates by confidence
+      const config = vscode.workspace.getConfiguration('pick-ltl');
+      const maxCandidates = config.get<number>('maxCandidates', 4);
+      const uniqueWithMeta = uniqueCandidates.map(regex => candidateMeta.get(regex)!);
+      const topCandidates = selectTopCandidatesByConfidence(uniqueWithMeta, maxCandidates);
+      const finalCandidateRegexes = topCandidates.map(c => c.formula);
+
+      // Check cancellation before refining candidates
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled before refining candidates');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      // Refine candidates with preserved classifications
+      if (sessionData.wordHistory.length > 0) {
+        this.sendMessage({ 
+          type: 'status', 
+          message: `Re-applying your ${sessionData.wordHistory.length} previous classification${sessionData.wordHistory.length === 1 ? '' : 's'} to new candidates...` 
+        });
+      }
+      this.sendMessage({ type: 'status', message: 'Determining elimination thresholds...' });
+
+      const suggestedWords = this.collectEdgeCaseSuggestions(topCandidates);
+
+      const seeds = finalCandidateRegexes.map(regex => {
+        const meta = candidateMeta.get(regex);
+        return {
+          pattern: regex,
+          explanation: meta?.explanation,
+          confidence: meta?.confidence
+        };
+      });
+
+      // Filter equivalence map to only include selected candidates
+      const filteredEquivalenceMap = new Map<string, string[]>();
+      for (const regex of finalCandidateRegexes) {
+        const equivalents = equivalenceMap.get(regex);
+        if (equivalents) {
+          filteredEquivalenceMap.set(regex, equivalents);
+        }
+      }
+
+      await this.controller.refineCandidates(prompt, seeds, filteredEquivalenceMap, (current, total) => {
+        const percent = Math.round((current / total) * 100);
+        this.sendMessage({ type: 'status', message: `Determining elimination thresholds... ${percent}%` });
+      }, suggestedWords);
+      
+      // Check cancellation before sending results
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled before sending refined candidates to UI');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      this.sendMessage({
+        type: 'candidatesRefined',
+        candidates: this.controller.getStatus().candidateDetails,
+        preservedClassifications: sessionData.wordHistory.length
+      });
+
+      this.surfaceModelWarnings(warnings);
+
+      // Check cancellation before generating first pair
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        logger.info('Operation cancelled before generating first word pair (refinement)');
+        this.sendMessage({ 
+          type: 'cancelled', 
+          message: 'Operation cancelled by user.' 
+        });
+        return;
+      }
+
+      // Generate first word pair (or proceed to final result if only 1 candidate)
+      this.handleRequestNextPair();
+      
+    } catch (error) {
+      logger.error(error, 'Error refining candidates');
+      this.sendMessage({
+        type: 'error',
+        message: `Error: ${error}`
+      });
+    }
+  }
+
+  private handleReset(preserveClassifications = false) {
+    this.controller.reset(preserveClassifications);
+    logger.info(`Reset requested from webview (preserveClassifications: ${preserveClassifications}).`);
+    this.sendMessage({ type: 'reset', preserveClassifications });
+  }
+
+  private handleCancel() {
+    logger.info('Cancel requested from webview');
+    
+    // Cancel any ongoing LLM request
+    if (this.cancellationTokenSource) {
+      this.cancellationTokenSource.cancel();
+      // Don't dispose or set to undefined yet - ongoing operations still need to check isCancellationRequested
+      // The token will be disposed and replaced when a new operation starts
+    }
+    this.stopActiveHeartbeat();
+    
+    // Reset controller state
+    this.controller.reset(false);
+    
+    // Notify webview
+    this.sendMessage({ 
+      type: 'cancelled', 
+      message: 'Operation cancelled by user.' 
+    });
+  }
+
+  /**
+   * Equivalence check with cancellation and timeout, using RB.isEquivalent.
+   */
+  private async checkEquivalenceWithTimeout(
+    a: string,
+    b: string,
+    timeoutMs = 5000,
+    token?: vscode.CancellationToken
+  ): Promise<boolean> {
+    const cancellationToken = token ?? this.cancellationTokenSource?.token;
+
+    const equivalencePromise = (async () => {
+      if (cancellationToken?.isCancellationRequested) {
+        throw new Error('Equivalence check cancelled by user');
+      }
+      return await this.analyzer.areEquivalent(a, b);
+    })();
+
+    const cancellationPromise = cancellationToken
+      ? new Promise<never>((_, reject) => cancellationToken.onCancellationRequested(() => reject(new Error('Equivalence check cancelled by user'))))
+      : undefined;
+
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Equivalence check timeout - regex too complex')), timeoutMs)
+    );
+
+    const racers: Promise<boolean>[] = [equivalencePromise, timeoutPromise];
+    if (cancellationPromise) {
+      racers.push(cancellationPromise);
+    }
+    
+    return await Promise.race(racers);
+  }
+
+  /**
+   * Filter out equivalent/duplicate regexes
+   */
+  private async filterEquivalentRegexes(regexes: string[]): Promise<{ uniqueRegexes: string[]; equivalenceMap: Map<string, string[]>; }> {
+    // PASS 1: Fast exact string deduplication (preserving order)
+    const seen = new Set<string>();
+    const exactUnique: string[] = [];
+    const duplicateBuckets = new Map<string, Set<string>>();
+
+    for (const regex of regexes) {
+      const bucket = duplicateBuckets.get(regex) ?? new Set<string>();
+      bucket.add(regex);
+      duplicateBuckets.set(regex, bucket);
+
+      if (!seen.has(regex)) {
+        seen.add(regex);
+        exactUnique.push(regex);
+      }
+    }
+    
+    logger.info(`After exact deduplication: ${exactUnique.length}/${regexes.length} unique regexes`);
+    
+    if (exactUnique.length <= 1) {
+      if (exactUnique.length === 1) {
+        const duplicates = duplicateBuckets.get(exactUnique[0]) ?? new Set<string>();
+        duplicates.delete(exactUnique[0]);
+        return {
+          uniqueRegexes: exactUnique,
+          equivalenceMap: new Map<string, string[]>([[exactUnique[0], Array.from(duplicates)]])
+        };
+      }
+      return {
+        uniqueRegexes: exactUnique,
+        equivalenceMap: new Map<string, string[]>()
+      };
+    }
+
+    // PASS 2: Semantic equivalence using direct automata analysis (RB)
+    // Skip sampling-based approaches and go straight to RB.isEquivalent for faster, more reliable deduplication
+    const unique: string[] = [];
+    const equivalenceMap = new Map<string, Set<string>>();
+    let automataAnalysisFailures = 0;
+
+    for (let i = 0; i < exactUnique.length; i++) {
+      const regex = exactUnique[i];
+      const duplicates = duplicateBuckets.get(regex) ?? new Set<string>();
+      duplicates.delete(regex);
+
+      // Check cancellation
+      if (this.cancellationTokenSource?.token.isCancellationRequested) {
+        throw new Error('Filtering cancelled by user');
+      }
+
+      let isEquivalent = false;
+      let equivalentTo: string | undefined;
+
+      for (const uniqueRegex of unique) {
+        // Check cancellation before each comparison
+        if (this.cancellationTokenSource?.token.isCancellationRequested) {
+          throw new Error('Filtering cancelled by user');
+        }
+        
+        // Direct automata-based equivalence check
+        try {
+          logger.info(`Equivalence check: comparing "${regex}" vs "${uniqueRegex}"...`);
+          const equivalent = await this.checkEquivalenceWithTimeout(regex, uniqueRegex, 8000, this.cancellationTokenSource?.token);
+
+          if (equivalent) {
+            logger.info(`Found equivalent: "${regex}" === "${uniqueRegex}"`);
+            isEquivalent = true;
+            equivalentTo = uniqueRegex;
+            break;
+          }
+        } catch (error) {
+          const errMsg = String(error);
+          if (errMsg.includes('cancelled')) {
+            throw error; // Re-throw cancellation
+          }
+
+          // Equivalence analysis failed or timed out. Log and conservatively keep both.
+          logger.warn(`Equivalence analysis failed for "${regex}" vs "${uniqueRegex}": ${errMsg}`);
+          automataAnalysisFailures++;
+        }
+      }
+
+      if (!isEquivalent) {
+        unique.push(regex);
+        equivalenceMap.set(regex, new Set<string>(duplicates));
+        logger.info(`Keeping unique regex: "${regex}" (${unique.length} total)`);
+      } else if (equivalentTo) {
+        const group = equivalenceMap.get(equivalentTo) ?? new Set<string>();
+        duplicates.forEach(d => group.add(d));
+        group.add(regex);
+        equivalenceMap.set(equivalentTo, group);
+      }
+    }
+
+    // Show warning if automata analysis failed for some regexes
+    if (automataAnalysisFailures > 0) {
+      const message = `Unexpected automata analysis failures (${automataAnalysisFailures}). Some regexes may not have been properly deduplicated.`;
+      logger.warn(message);
+    }
+
+    logger.info(`Final: ${unique.length}/${regexes.length} semantically unique regexes`);
+    const finalMap = new Map<string, string[]>();
+    for (const regex of unique) {
+      const equivalents = equivalenceMap.get(regex);
+      finalMap.set(regex, equivalents ? Array.from(equivalents) : []);
+    }
+
+    return { uniqueRegexes: unique, equivalenceMap: finalMap };
+  }
+
+  private sendMessage(message: any) {
+    if (this.view) {
+      this.view.webview.postMessage(message);
+    }
+  }
+
+  private surfaceModelWarnings(warnings: string[]) {
+    const formatted = warnings
+      .map(warning => warning.trim())
+      .filter(warning => warning.length > 0)
+      .map(warning => warning.slice(0, 240));
+
+    if (formatted.length === 0) {
+      return;
+    }
+
+    const cautionIntro = 'This task may not be best suited for regular expressions.';
+    
+    let warningBody: string;
+    if (formatted.length === 1) {
+      warningBody = formatted[0];
+    } else {
+      const bulletPoints = formatted.map(w => `• ${w}`).join('\n');
+      warningBody = bulletPoints;
+    }
+    
+    const disclaimer = `\n\nThis determination was made by the language model and may be incorrect.`;
+
+    this.sendMessage({
+      type: 'warning',
+      message: `${cautionIntro}\n\n${warningBody}${disclaimer}`
+    });
+  }
+
+  /**
+   * Periodically surface a status heartbeat to the webview while waiting for LLM responses.
+   */
+  private startModelHeartbeat(message: string, intervalMs = 8000): { stop: () => void } {
+    this.stopActiveHeartbeat();
+
+    const interval = setInterval(() => this.sendMessage({ type: 'status', message }), intervalMs);
+    const stop = () => {
+      clearInterval(interval);
+      if (this.activeHeartbeat && this.activeHeartbeat.stop === stop) {
+        this.activeHeartbeat = undefined;
+      }
+    };
+
+    const heartbeat = { stop };
+    this.activeHeartbeat = heartbeat;
+    return heartbeat;
+  }
+
+  private stopActiveHeartbeat() {
+    if (this.activeHeartbeat) {
+      this.activeHeartbeat.stop();
+      this.activeHeartbeat = undefined;
+    }
+  }
+
+  /** Build a map of trace string -> SVG render data for the given words (cached). */
+  private async buildHistoryRenderData(words: string[]): Promise<Record<string, unknown>> {
+    const out: Record<string, unknown> = {};
+    for (const w of new Set(words)) {
+      if (!this.renderCache.has(w)) {
+        this.renderCache.set(w, await this.analyzer.renderData(w));
+      }
+      const rd = this.renderCache.get(w);
+      if (rd) {
+        out[w] = rd;
+      }
+    }
+    return out;
+  }
+
+  private getHtmlForWebview(webview: vscode.Webview) {
+    const htmlPath = path.join(this.extensionUri.fsPath, 'media', 'pickView.html');
+    const splashPath = path.join(this.extensionUri.fsPath, 'media', 'pickSplash.html');
+    const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'pickView.js'));
+    const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'pickView.css'));
+    const traceRendererUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'vendor', 'tracerenderer.js'));
+    
+    try {
+      const splashHtml = fs.readFileSync(splashPath, 'utf8');
+      let html = fs.readFileSync(htmlPath, 'utf8');
+      // Inject the CSS, JS, and splash partial into the HTML
+      html = html.replace('<!--CSS_URI_PLACEHOLDER-->', cssUri.toString());
+      html = html.replace('<!--TRACERENDERER_URI_PLACEHOLDER-->', traceRendererUri.toString());
+      html = html.replace('<!--JS_URI_PLACEHOLDER-->', jsUri.toString());
+      html = html.replace('<!--SPLASH_HTML_PLACEHOLDER-->', splashHtml);
+      return html;
+    } catch (err) {
+      // In test environments the media file may not be available. Return a minimal
+      // HTML fallback so unit tests that instantiate the view provider don't fail
+      // with ENOENT. This keeps production behavior unchanged when the file exists.
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.warn(`Could not read webview HTML at ${htmlPath}: ${errorMessage}`);
+      return `<!doctype html><html><body><div id="pick-root"></div><script>const vscode = acquireVsCodeApi();</script></body></html>`;
+    }
+  }
+
+  /**
+   * Clear any persisted webview state (prompt history, splash acknowledgement).
+   * Invoked by the reset command so the splash and history reset alongside global storage.
+   */
+  public async resetLocalWebviewState() {
+    await this.setPreferredModelId(undefined);
+    this.sendMessage({ type: 'resetLocalState' });
+  }
+
+  // Separated clipboard access for easier stubbing in tests
+  private async copyToClipboard(text: string) {
+    return vscode.env.clipboard.writeText(text);
+  }
+}

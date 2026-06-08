@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PICK - LTL Builder</title>
+    <link rel="stylesheet" href="<!--CSS_URI_PLACEHOLDER-->">
+    <script src="<!--TRACERENDERER_URI_PLACEHOLDER-->"></script>
+</head>
+
+<body>
+    <!--SPLASH_HTML_PLACEHOLDER-->
+    <div class="container">
+        <!-- Status Bar (global - shown during LLM operations) -->
+            <div id="statusBar" class="status-bar hidden">
+                <div id="statusMessage" class="status-message"></div>
+                <div id="statusWarnings" class="status-warnings hidden" role="note" aria-live="polite" aria-hidden="true"></div>
+                <div class="status-actions">
+                    <button id="reportIssueBtn" class="icon-btn small" title="Report an issue" aria-label="Report an issue">
+                        <span class="codicon codicon-bug" aria-hidden="true"></span>
+                        <span class="btn-label">Report Issue</span>
+                    </button>
+                    <button id="statusCancelBtn" class="icon-btn small stop-btn hidden" title="Cancel generation" aria-label="Cancel generation">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <path d="M7 7 L17 17 M17 7 L7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <!-- Initial Prompt -->
+
+
+
+
+        <div id="promptSection" class="section">
+  <!-- Model Selector Row -->
+  <div id="modelSelectorRow" style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--vscode-panel-border);">
+    <label for="modelSelect" style="font-size: 12px; color: var(--vscode-descriptionForeground); white-space: nowrap;">Model:</label>
+    <select id="modelSelect" style="flex: 1; padding: 4px 8px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 2px; font-size: 12px; height: 28px;">
+      <option value="">Loading models...</option>
+    </select>
+    <button id="refreshModelsBtn" class="icon-btn small" title="Refresh model list" aria-label="Refresh model list" style="padding: 4px 6px; height: 28px; font-size: 14px;">
+      🔄
+    </button>
+  </div>
+
+  <p style="margin: 0 0 6px 0; font-size: 1.05rem; font-weight: 500;">
+    Describe the temporal behavior the property should capture.
+  </p>
+
+    <div class="prompt-row">
+      <textarea
+        id="promptInput"
+        class="prompt-input"
+        placeholder=""
+        rows="2"
+        style="flex: 1; margin-bottom: 0;"
+      ></textarea>
+
+      <div class="prompt-actions" aria-live="polite">
+        <button
+          id="loadSessionBtnPrompt"
+          class="icon-btn subtle"
+          title="Load session from JSON"
+          aria-label="Load session from exported JSON file"
+        >
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="14" height="14">
+            <path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V6h5.17l2 2H20v10z" fill="currentColor" />
+          </svg>
+        </button>
+        <input type="file" id="loadSessionFilePrompt" accept=".json,application/json" style="display:none;" aria-hidden="true" />
+
+        <button
+          id="recentPromptsBtn"
+          class="icon-btn subtle"
+          title="Recent prompts (Ctrl+Shift+H / Cmd+Shift+H)"
+          aria-label="Show recent prompts"
+          aria-haspopup="true"
+          aria-expanded="false"
+        >
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="14" height="14">
+            <path d="M12 3a9 9 0 1 0 9 9 9.01 9.01 0 0 0-9-9Zm0 16.2A7.2 7.2 0 1 1 19.2 12 7.21 7.21 0 0 1 12 19.2Zm.6-11.7h-1.2v5l4.2 2.5.6-1-3.6-2.1Z" fill="currentColor" />
+          </svg>
+        </button>
+
+        <button
+          id="generateBtn"
+          class="primary"
+          style="min-width: 40px; width: 40px; margin-bottom: 0;"
+          title="Generate candidate formulas"
+          aria-label="Generate candidate formulas"
+        >
+          <svg id="generateIcon" viewBox="0 0 24 24" fill="none"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true"
+               width="16" height="16">
+            <path d="M6 4l12 8-12 8V4z" fill="currentColor" />
+          </svg>
+        </button>
+
+        <button id="inlineCancelBtn" class="icon-btn small stop-btn hidden" title="Cancel generation" aria-label="Cancel generation">
+          <svg id="stopIcon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M7 7 L17 17 M17 7 L7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+          </svg>
+        </button>
+      </div>
+
+      <div id="recentPromptsMenu" class="history-menu hidden" role="menu" aria-label="Recent prompts">
+        <div class="history-menu__header">Recent prompts</div>
+        <div id="recentPromptList" class="history-menu__items"></div>
+      </div>
+      <span id="loadSessionStatus" class="history-copy-status" role="status" aria-live="polite"></span>
+    </div>
+  </div>
+
+
+        <!-- Voting Section -->
+        <div id="votingSection" class="section hidden">
+            <div id="currentPromptDisplay" class="current-prompt-display"></div>
+            <div style="margin-bottom: 12px;">
+                <button id="startFreshBtn" class="secondary full-width">Build a New Formula</button>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h4 style="margin:0;">Should the intended property accept these traces?</h4>
+                <div class="display-controls" aria-hidden="false">
+                    <span
+                        id="literalIndicator"
+                        class="literal-indicator hidden"
+                        role="status"
+                        aria-live="polite"
+                        aria-hidden="true"
+                        title="Whitespace disambiguation on (shows whitespace/control symbols)"
+                        aria-label="Whitespace disambiguation on">
+                        → ↵
+                    </span>
+                    <span
+                        id="diffIndicator"
+                        class="literal-indicator hidden"
+                        role="status"
+                        aria-live="polite"
+                        aria-hidden="true"
+                        title="Diff view on"
+                        aria-label="Diff view on">
+                        Diff
+                    </span>
+                    <span
+                        id="candidatesIndicator"
+                        class="literal-indicator hidden"
+                        role="status"
+                        aria-live="polite"
+                        aria-hidden="true"
+                        title="Candidates list hidden"
+                        aria-label="Candidates list hidden">
+                        Candidates hidden
+                    </span>
+                    <button id="displayOptionsBtn" class="icon-btn" title="Display options" aria-haspopup="true"
+                        aria-expanded="false" aria-controls="displayOptionsMenu">
+                        <!-- simpler gear: use emoji for consistent rendering across themes -->
+                        <span aria-hidden="true" style="font-size:16px; line-height:1;">⚙️</span>
+                    </button>
+                    <div id="displayOptionsMenu" class="display-menu hidden" role="menu" aria-label="Display options">
+                        <label id="literalMenuRow" class="menu-row" role="menuitemcheckbox" aria-checked="false">
+                            <input type="checkbox" id="literalToggle"
+                                aria-label="Literal mode — visualize whitespace and control characters">
+                            <span>Whitespace disambiguation (literal mode) — show whitespace &amp; control characters</span>
+                        </label>
+                        <label id="diffMenuRow" class="menu-row" role="menuitemcheckbox" aria-checked="false">
+                            <input type="checkbox" id="diffToggle" aria-label="Show diff between traces (off by default)">
+                            <span>Show diff between traces</span>
+                        </label>
+                        <label id="showCandidatesMenuRow" class="menu-row" role="menuitemcheckbox" aria-checked="true">
+                            <input type="checkbox" id="showCandidatesToggle" checked aria-label="Show candidates list">
+                            <span>Show candidates list</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="word-pair" id="wordPair"></div>
+
+            <!-- <div class="word-edit-hint" id="wordEditHint">
+                <span aria-hidden="true">✎</span>
+                Words are editable — click to tweak, or add your own examples below.
+            </div> -->
+
+            <div class="custom-examples" id="customExamples">
+                <button id="customExamplesToggle" class="pill-btn" aria-expanded="false" aria-controls="customExamplesPanel">
+                    <span aria-hidden="true">＋</span>
+                    Add your own examples
+                </button>
+                <div id="customExamplesPanel" class="custom-examples__panel hidden" role="region" aria-label="Add your own examples">
+                    <div class="custom-examples__header">
+                        <!-- <div>
+                            <div class="custom-examples__hint">Enter one example, then upvote if it should match or downvote if it should not.</div>
+                        </div> -->
+                        <button id="customExamplesCancel" class="icon-btn subtle" title="Close custom examples" aria-label="Close custom examples">
+                            ✕
+                        </button>
+                    </div>
+                    <div class="custom-examples__controls">
+                        <label class="custom-examples__field">
+                            <!-- <span class="custom-examples__label">Example</span> -->
+                            <input id="customExamplesInput" type="text" />
+                        </label>
+                        <div class="custom-examples__actions">
+                            <button id="customExamplesVoteUp" class="btn accept" title="Upvote (this should match)">
+                                <span aria-hidden="true">▲</span>
+                                <!-- <span class="btn-label">Upvote</span> -->
+                            </button>
+                            <button id="customExamplesVoteDown" class="btn reject" title="Downvote (this should NOT match)">
+                                <span aria-hidden="true">▼</span>
+                                <!-- <span class="btn-label">Downvote</span> -->
+                            </button>
+                        </div>
+                    </div>
+                    <div id="customExamplesStatus" class="custom-examples__status" role="status" aria-live="polite"></div>
+                </div>
+            </div>
+
+            <div class="candidates-list" id="candidatesList"></div>
+            <div class="word-history" id="wordHistory">
+                <div class="word-history__header">
+                    <h3>Trace Classification History</h3>
+                    <div class="history-actions">
+                        <button id="copyHistoryBtn" class="icon-btn subtle" title="Export session as JSON" aria-label="Export session as JSON">
+                            <span class="codicon codicon-clippy" aria-hidden="true"></span>
+                            <span class="btn-label">Export</span>
+                        </button>
+                        <span id="historyCopyStatus" class="history-copy-status" role="status" aria-live="polite"></span>
+                    </div>
+                </div>
+                <div id="historyItems"></div>
+            </div>
+        </div>
+
+        <!-- Final Result -->
+        <div id="finalSection" class="section hidden">
+            <div class="final-result">
+                <div id="finalPromptDisplay" class="current-prompt-display"></div>
+                <h2>Final Formula</h2>
+                <div class="regex-display" id="finalRegex"></div>
+                <div class="examples">
+                    <div class="example-box in">
+                        <h3>Traces that satisfy</h3>
+                        <div id="wordsIn"></div>
+                    </div>
+                    <div class="example-box out">
+                        <h3>Traces that don't</h3>
+                        <div id="wordsOut"></div>
+                    </div>
+                </div>
+                <button id="resetBtn" class="full-width">Build a New Formula</button>
+            </div>
+        </div>
+
+        <!-- Error Display -->
+        <div id="errorSection" class="error hidden"></div>
+
+        <!-- Candidates help modal (hidden by default) -->
+        <div id="candidatesHelpModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="candidatesHelpTitle">
+  <div class="modal-overlay" id="candidatesHelpOverlay"></div>
+  <div class="modal-content" role="document">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <h3 id="candidatesHelpTitle" style="margin:0;">Where do these candidates come from?</h3>
+      <button id="candidatesHelpClose" class="icon-btn" title="Close">✕</button>
+    </div>
+
+    <p>These LTL formula candidates are generated by the language model you’ve enabled in VS Code.</p>
+
+    <p>PICK sends your description to that model and asks it to suggest several possible LTL formulas.</p>
+
+    <p>PICK then helps you choose between them by having you vote on which example traces should or should not be accepted. As you classify examples, incompatible candidates are eliminated.</p>
+
+    <p>If none of the candidates seem correct, we recommend refining the description above and generating a new set of options.</p>
+  </div>
+</div>
+
+    </div>
+
+    <!-- External JavaScript file -->
+    <script src="<!--JS_URI_PLACEHOLDER-->"></script>
+    <script>
+        // Initialize the webview with the VS Code API
+        const vscode = acquireVsCodeApi();
+        if (window.initializePickView) {
+            window.initializePickView(vscode);
+        }
+        
+        </script>
+</body>
+
+</html>
