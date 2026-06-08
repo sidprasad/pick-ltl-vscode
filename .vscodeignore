@@ -1,24 +1,26 @@
 .vscode/**
 .vscode-test/**
+.github/**
 src/**
 .gitignore
 .yarnrc
+AGENTS.md
 vsc-extension-quickstart.md
 **/tsconfig.json
 **/eslint.config.mjs
 **/*.map
 **/*.ts
 **/.vscode-test.*
+*.vsix
 
-# Exclude devDependencies (keep @gruhn/regex-utils and prismjs)
-node_modules/@napi-rs/**
+# Exclude dev-only dependencies. Runtime deps (@sidprasad/ltl-ts and its
+# antlr4ng) are intentionally kept so the engine ships in the .vsix.
 node_modules/@types/**
 node_modules/@vscode/**
-node_modules/eslint/**
-node_modules/mocha/**
-node_modules/sharp/**
-node_modules/typescript/**
-node_modules/typescript-eslint/**
-node_modules/vsce/**
 node_modules/@eslint/**
 node_modules/@typescript-eslint/**
+node_modules/eslint/**
+node_modules/mocha/**
+node_modules/typescript/**
+node_modules/typescript-eslint/**
+node_modules/ovsx/**

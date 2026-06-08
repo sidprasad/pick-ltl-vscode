@@ -141,7 +141,9 @@
     "vendor:copy": "mkdir -p media/vendor && cp node_modules/@sidprasad/ltl-ts/viz/tracerenderer.js media/vendor/tracerenderer.js",
     "clean": "rm -rf out",
     "compile": "npm run vendor:copy && tsc -p ./",
-    "package:vsix": "npx vsce package",
+    "package:vsix": "npx @vscode/vsce package",
+    "publish:vsce": "npx @vscode/vsce publish",
+    "publish:ovsx": "npx ovsx publish",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run clean && npm run compile && npm run lint",
     "lint": "eslint src",
@@ -158,7 +160,8 @@
     "mocha": "^10.7.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.3",
-    "vsce": "^2.9.0"
+    "@vscode/vsce": "^3.2.0",
+    "ovsx": "^0.10.1"
   },
   "dependencies": {
     "@sidprasad/ltl-ts": "github:sidprasad/ltl-ts#v0.1.0"

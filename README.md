@@ -60,7 +60,28 @@ The webview trace renderer (`media/vendor/tracerenderer.js`) is copied from the 
 
 # Packaging
 
-`npm run package:vsix` (i.e. `vsce package`) produces a working `.vsix` (~2.5 MB). Because the engine is a normal GitHub dependency installed into `node_modules` (not a local symlink), `vsce` bundles `@sidprasad/ltl-ts/dist`, its runtime dependency `antlr4ng`, and the SVG renderer correctly. Do **not** exclude `antlr4ng` from `.vscodeignore` — it is a runtime dependency of the engine. The engine repo is public, so Marketplace publishing works too (the build pipeline can clone the dependency).
+`npm run package:vsix` (i.e. `@vscode/vsce package`) produces a working `.vsix` (~2.5 MB). Because the engine is a normal GitHub dependency installed into `node_modules` (not a local symlink), it bundles `@sidprasad/ltl-ts/dist`, its runtime dependency `antlr4ng`, and the SVG renderer correctly. Do **not** exclude `antlr4ng` from `.vscodeignore` — it is a runtime dependency of the engine.
+
+---
+
+# Releasing
+
+Releases are automated by [`.github/workflows/release.yml`](.github/workflows/release.yml). To cut one, push a version tag:
+
+```bash
+npm version patch        # bumps package.json version and creates a git tag
+git push --follow-tags   # pushes the commit + tag
+# or manually: git tag v0.1.0 && git push origin v0.1.0
+```
+
+On a `v*` tag the workflow installs deps, compiles, lints, runs the engine-bridge tests, packages the `.vsix`, and **creates a GitHub Release with the `.vsix` attached**. (`workflow_dispatch` builds + uploads the `.vsix` as an artifact without creating a release.)
+
+To also publish to the registries, add repository **secrets** (Settings → Secrets and variables → Actions); the corresponding step runs only when its secret is present:
+
+- `VSCE_PAT` — a Visual Studio Marketplace Personal Access Token (publisher `SiddharthaPrasad`) → publishes to the VS Code Marketplace.
+- `OVSX_PAT` — an [Open VSX](https://open-vsx.org) access token → publishes to Open VSX.
+
+`ci.yml` runs compile + lint + the full VS Code integration tests (under `xvfb`) on every push/PR to `main`.
 
 ---
 

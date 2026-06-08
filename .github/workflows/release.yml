@@ -1,0 +1,71 @@
+name: Release
+
+# Cut a release by pushing a version tag, e.g.:
+#   npm version patch   # bumps package.json + creates a git tag
+#   git push --follow-tags
+# or tag manually:  git tag v0.1.0 && git push origin v0.1.0
+#
+# On a tag push this builds the .vsix, attaches it to a GitHub Release, and
+# (only if the corresponding secret is set) publishes to the VS Code Marketplace
+# and/or Open VSX. `workflow_dispatch` builds + uploads the .vsix as an artifact
+# without creating a release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write # required to create the GitHub Release and upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.18.1'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile and lint
+        run: |
+          npm run compile
+          npm run lint
+
+      - name: Engine-bridge tests (no VS Code host needed)
+        run: npx mocha --ui tdd --timeout 8000 out/test/ltlAnalyzer.test.js
+
+      - name: Package VSIX
+        run: npm run package:vsix
+
+      - name: Upload VSIX as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pick-ltl-vsix
+          path: '*.vsix'
+
+      - name: Create GitHub Release with the VSIX
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: '*.vsix'
+          generate_release_notes: true
+
+      - name: Publish to the VS Code Marketplace
+        if: ${{ startsWith(github.ref, 'refs/tags/') && env.VSCE_PAT != '' }}
+        run: npx @vscode/vsce publish --pat "$VSCE_PAT"
+
+      - name: Publish to Open VSX
+        if: ${{ startsWith(github.ref, 'refs/tags/') && env.OVSX_PAT != '' }}
+        run: npx ovsx publish *.vsix --pat "$OVSX_PAT"
