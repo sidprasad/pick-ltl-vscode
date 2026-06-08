@@ -15,7 +15,7 @@ export class SurveyPrompt {
   private static readonly SHOW_COOLDOWN = 3;
   private static readonly SHOW_COOLDOWN_GROWTH_FACTOR = 2;
   private static readonly SURVEY_URL = 'https://brown.co1.qualtrics.com/jfe/form/SV_a90QURkTTwI9eHY';
-  private static readonly MARKETPLACE_URL = 'https://marketplace.visualstudio.com/items?itemName=SiddharthaPrasad.pick-regex&ssr=false#review-details';
+  private static readonly MARKETPLACE_URL = 'https://marketplace.visualstudio.com/items?itemName=SiddharthaPrasad.pick-ltl&ssr=false#review-details';
   
   constructor(private context: vscode.ExtensionContext) {}
 

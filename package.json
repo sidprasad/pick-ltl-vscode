@@ -38,7 +38,7 @@
         {
           "id": "pick-ltl-explorer",
           "title": "PICK LTL Builder",
-          "icon": "$(symbol-event)"
+          "icon": "images/activitybar.svg"
         }
       ]
     },
@@ -48,7 +48,7 @@
           "type": "webview",
           "id": "pick-ltl.pickView",
           "name": "LTL Builder",
-          "icon": "$(symbol-event)"
+          "icon": "images/activitybar.svg"
         }
       ]
     },

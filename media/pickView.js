@@ -38,6 +38,7 @@
         const recentPromptsMenu = document.getElementById('recentPromptsMenu');
         const recentPromptList = document.getElementById('recentPromptList');
         const diffIndicator = document.getElementById('diffIndicator');
+        const traceSyntaxToggle = document.getElementById('traceSyntaxToggle');
         const candidatesIndicator = document.getElementById('candidatesIndicator');
 
         // Model selector elements
@@ -326,6 +327,9 @@
         let literalMode = savedLiteralMode;
         // Track diff view state (off by default)
         let diffMode = diffToggle ? diffToggle.checked : false;
+        // Trace display mode: false = SVG diagram, true = SPOT trace syntax (text).
+        // Persisted; default is the diagram view.
+        let traceSyntaxMode = typeof viewState.traceSyntaxMode === 'boolean' ? viewState.traceSyntaxMode : false;
         let latestWordHistory = Array.isArray(viewState.wordHistory) ? viewState.wordHistory : [];
         let latestCandidates = [];
         let latestActivePrompt = '';
@@ -347,6 +351,7 @@
         // Initialize body data attributes
         document.body.setAttribute('data-literal-mode', literalMode.toString());
         document.body.setAttribute('data-diff-mode', diffMode.toString());
+        updateTraceSyntaxModeUI();
 
         function updateLiteralModeUI() {
             document.body.setAttribute('data-literal-mode', literalMode.toString());
@@ -385,6 +390,19 @@
                     diffIndicator.setAttribute('aria-hidden', 'true');
                 }
             }
+        }
+
+        function updateTraceSyntaxModeUI() {
+            document.body.setAttribute('data-trace-syntax', traceSyntaxMode.toString());
+            if (traceSyntaxToggle) {
+                traceSyntaxToggle.checked = traceSyntaxMode;
+            }
+            const menuRow = document.getElementById('traceSyntaxMenuRow');
+            if (menuRow) {
+                menuRow.setAttribute('aria-checked', traceSyntaxMode ? 'true' : 'false');
+            }
+            viewState = { ...viewState, traceSyntaxMode };
+            vscode.setState(viewState);
         }
 
         function updateCandidatesUI(showCandidates) {
@@ -1271,6 +1289,19 @@
                 // Re-render current pair if one exists
                 if (lastPair && lastStatus) {
                     showWordPair(lastPair, lastStatus);
+                }
+            });
+        }
+
+        if (traceSyntaxToggle) {
+            traceSyntaxToggle.addEventListener('change', function() {
+                traceSyntaxMode = traceSyntaxToggle.checked;
+                updateTraceSyntaxModeUI();
+                // Re-render the current pair and/or history with the new display mode.
+                if (lastPair && lastStatus) {
+                    showWordPair(lastPair, lastStatus, lastPairMatches);
+                } else if (lastStatus && lastStatus.wordHistory) {
+                    updateWordHistory(lastStatus.wordHistory);
                 }
             });
         }
@@ -2168,18 +2199,24 @@
                 // editable lasso string. Falls back gracefully if render data is
                 // unavailable or the trace could not be parsed.
                 const rd = lastRenderData ? (side === 'a' ? lastRenderData.word1 : lastRenderData.word2) : null;
-                if (rd && typeof TraceRenderer !== 'undefined' && TraceRenderer.render) {
+                let svgShown = false;
+                if (!traceSyntaxMode && rd && typeof TraceRenderer !== 'undefined' && TraceRenderer.render) {
                     const traceDiv = document.createElement('div');
                     traceDiv.className = 'trace-display';
                     card.appendChild(traceDiv);
                     try {
                         TraceRenderer.render(traceDiv, rd, {});
+                        svgShown = true;
                     } catch (e) {
                         log('warn', 'TraceRenderer failed: ' + e);
                     }
                 }
 
-                card.appendChild(display);
+                // Two views: diagram mode shows only the SVG; SPOT-syntax mode (or a
+                // diagram that failed to render) shows the editable lasso-string.
+                if (!svgShown) {
+                    card.appendChild(display);
+                }
                 card.appendChild(actions);
 
                 return card;
@@ -2360,7 +2397,7 @@
                 // Render the classified trace as an SVG diagram (falls back to the
                 // lasso string shown below if render data is unavailable).
                 const histRender = lastHistoryRenderData && lastHistoryRenderData[item.word];
-                if (histRender && typeof TraceRenderer !== 'undefined' && TraceRenderer.render) {
+                if (!traceSyntaxMode && histRender && typeof TraceRenderer !== 'undefined' && TraceRenderer.render) {
                     const histTrace = document.createElement('div');
                     histTrace.className = 'trace-display trace-display--history';
                     historyItem.appendChild(histTrace);

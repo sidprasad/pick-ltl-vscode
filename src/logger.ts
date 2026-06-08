@@ -17,7 +17,7 @@ class Logger {
         private readonly logBuffer: string[] = [];
         private readonly maxLogLines = 500;
 
-        initialize(context: vscodeType.ExtensionContext | { subscriptions: any[] }, name = 'PICK Regex Builder'): void {
+        initialize(context: vscodeType.ExtensionContext | { subscriptions: any[] }, name = 'PICK LTL Builder'): void {
                 if (this.channel || !vscode) {
                         return;
                 }

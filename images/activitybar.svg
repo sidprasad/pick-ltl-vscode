@@ -1,0 +1,7 @@
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none">
+  <!-- box = G (always) -->
+  <rect x="2.5" y="8" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.5"/>
+  <!-- diamond = F (eventually) -->
+  <rect x="14.2" y="8.2" width="7.1" height="7.1" rx="1.1" stroke="currentColor" stroke-width="1.5"
+        transform="rotate(45 17.75 11.75)"/>
+</svg>

@@ -12,7 +12,7 @@ import { logger } from './logger';
  * - Surface a friendly toast so the user knows to paste after the browser opens.
  */
 export async function openIssueReport(): Promise<void> {
-  const extension = vscode.extensions.getExtension('SiddharthaPrasad.pick-regex');
+  const extension = vscode.extensions.getExtension('SiddharthaPrasad.pick-ltl');
   const logs = logger.getLogs(200) || 'No logs captured this session.';
 
   // Keep logs fenced so GitHub doesn't treat them as lists/bullets when pasted.
@@ -46,7 +46,7 @@ export async function openIssueReport(): Promise<void> {
   await vscode.env.clipboard.writeText(body);
 
   // Use a clean new-issue link; user pastes the clipboard content.
-  const issueUrl = 'https://github.com/sidprasad/pick-regex/issues/new';
+  const issueUrl = 'https://github.com/sidprasad/pick-ltl-vscode/issues/new';
   await vscode.env.openExternal(vscode.Uri.parse(issueUrl));
   
   // Show modal dialog if enabled

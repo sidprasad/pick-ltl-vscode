@@ -1,4 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <rect width="128" height="128" rx="16" fill="#0078D4"/>
-  <text x="64" y="84" font-family="monospace, Consolas, 'Courier New'" font-size="72" font-weight="bold" fill="#FFFFFF" text-anchor="middle">.*</text>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6d5efc"/>
+      <stop offset="1" stop-color="#3322a8"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="54" fill="url(#bg)"/>
+  <!-- temporal "trace" line behind the operators -->
+  <line x1="80" y1="128" x2="174" y2="128" stroke="#ffffff" stroke-opacity="0.30" stroke-width="8" stroke-linecap="round"/>
+  <!-- box = G (always) -->
+  <rect x="46" y="94" width="68" height="68" rx="12" fill="none" stroke="#ffffff" stroke-width="15"/>
+  <!-- diamond = F (eventually) -->
+  <rect x="140" y="94" width="68" height="68" rx="12" fill="none" stroke="#c7d2fe" stroke-width="15"
+        transform="rotate(45 174 128)"/>
 </svg>

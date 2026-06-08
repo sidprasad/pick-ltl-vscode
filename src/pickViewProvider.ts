@@ -545,7 +545,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       if (validCandidates.length === 0) {
         this.sendMessage({ 
           type: 'error', 
-          message: 'All generated regexes contain invalid or unsupported syntax (e.g., word boundaries \\b, lookbehinds). Please try again.' 
+          message: 'All generated candidates were invalid LTL (could not be parsed). Please try again.' 
         });
         return;
       }
@@ -555,7 +555,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       }
 
       // Filter out equivalent/duplicate regexes
-      this.sendMessage({ type: 'status', message: 'Filtering duplicate regexes...' });
+      this.sendMessage({ type: 'status', message: 'Filtering duplicate formulas...' });
       let uniqueCandidates: string[] = [];
       let equivalenceMap: Map<string, string[]> = new Map();
       try {
@@ -589,7 +589,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       if (uniqueCandidates.length < candidates.length) {
         this.sendMessage({
           type: 'status',
-          message: `Removed ${candidates.length - uniqueCandidates.length} duplicate regex(es). Proceeding with ${uniqueCandidates.length} unique candidate(s).`
+          message: `Removed ${candidates.length - uniqueCandidates.length} duplicate formula(s). Proceeding with ${uniqueCandidates.length} unique candidate(s).`
         });
       }
 
@@ -1278,8 +1278,8 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       this.lastModelDescription = modelDescription ?? undefined;
       this.lastModelId = modelId;
       const statusMessage = modelDescription
-        ? `Asking ${modelDescription} to refine your regex candidates...`
-        : 'Asking your language model to refine your regex candidates...';
+        ? `Asking ${modelDescription} to refine your formula candidates...`
+        : 'Asking your language model to refine your formula candidates...';
       this.sendMessage({ type: 'status', message: statusMessage });
 
       const heartbeat = this.startModelHeartbeat(
@@ -1445,7 +1445,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       if (validCandidates.length === 0) {
         this.sendMessage({ 
           type: 'error', 
-          message: 'All generated regexes contain invalid or unsupported syntax (e.g., word boundaries \\b, lookbehinds). Please try again.' 
+          message: 'All generated candidates were invalid LTL (could not be parsed). Please try again.' 
         });
         return;
       }
@@ -1455,7 +1455,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       }
 
       // Filter out equivalent/duplicate regexes
-      this.sendMessage({ type: 'status', message: 'Filtering duplicate regexes...' });
+      this.sendMessage({ type: 'status', message: 'Filtering duplicate formulas...' });
       let uniqueCandidates: string[] = [];
       let equivalenceMap: Map<string, string[]> = new Map();
       try {
@@ -1489,7 +1489,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       if (uniqueCandidates.length < candidates.length) {
         this.sendMessage({
           type: 'status',
-          message: `Removed ${candidates.length - uniqueCandidates.length} duplicate regex(es). Proceeding with ${uniqueCandidates.length} unique candidate(s). Preserving ${sessionData.wordHistory.length} existing classifications.`
+          message: `Removed ${candidates.length - uniqueCandidates.length} duplicate formula(s). Proceeding with ${uniqueCandidates.length} unique candidate(s). Preserving ${sessionData.wordHistory.length} existing classifications.`
         });
       }
 

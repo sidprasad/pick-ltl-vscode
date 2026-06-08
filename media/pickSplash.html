@@ -6,17 +6,17 @@
         </div>
 
         <p class="splash-lede">
-            PICK helps you build a regex from a natural-language description by iteratively refining it with examples.
+            PICK helps you build an LTL formula from a natural-language description by iteratively refining it with example traces.
         </p>
 
         <p>
-            You start by describing what the regex should match.
+            You start by describing the temporal behavior your property should capture.
         </p>
         <p>
-            PICK sends that description to an LLM of your choice to surface several plausible interpretations.
+            PICK sends that description to an LLM of your choice to surface several plausible interpretations as candidate LTL formulas.
         </p>
         <p>
-            It then shows example strings, and your votes narrow down which behavior best matches your intent.
+            It then shows example traces, and your votes (should this trace satisfy the property?) narrow down which formula best matches your intent.
         </p>
 
         <p class="splash-disclaimer">
