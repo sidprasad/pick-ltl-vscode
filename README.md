@@ -43,7 +43,7 @@ All settings appear under the `pick-ltl` section in VS Code Settings, including:
 
 This extension depends on the LTL engine [`@sidprasad/ltl-ts`](https://github.com/sidprasad/ltl-ts) as a **GitHub dependency** (`"@sidprasad/ltl-ts": "github:sidprasad/ltl-ts#v0.1.0"`), so a plain `npm install` pulls it — no sibling checkout required. The engine repo ships its built `dist/`, so no build step runs at install time.
 
-> The engine repo is currently **private**, so `npm install` (and any CI) must have GitHub credentials to clone it. On a machine signed in with the GitHub CLI / git over HTTPS this works automatically.
+> The engine repo is public, so `npm install` clones it with no credentials required.
 
 ```bash
 npm install        # pulls @sidprasad/ltl-ts from GitHub
@@ -60,7 +60,7 @@ The webview trace renderer (`media/vendor/tracerenderer.js`) is copied from the 
 
 # Packaging
 
-`npm run package:vsix` (i.e. `vsce package`) produces a working `.vsix` (~2.5 MB). Because the engine is a normal GitHub dependency installed into `node_modules` (not a local symlink), `vsce` bundles `@sidprasad/ltl-ts/dist`, its runtime dependency `antlr4ng`, and the SVG renderer correctly. Do **not** exclude `antlr4ng` from `.vscodeignore` — it is a runtime dependency of the engine. (Marketplace publishing would additionally require making the engine repo public or pre-bundling it, since the Marketplace pipeline cannot clone a private dependency.)
+`npm run package:vsix` (i.e. `vsce package`) produces a working `.vsix` (~2.5 MB). Because the engine is a normal GitHub dependency installed into `node_modules` (not a local symlink), `vsce` bundles `@sidprasad/ltl-ts/dist`, its runtime dependency `antlr4ng`, and the SVG renderer correctly. Do **not** exclude `antlr4ng` from `.vscodeignore` — it is a runtime dependency of the engine. The engine repo is public, so Marketplace publishing works too (the build pipeline can clone the dependency).
 
 ---
 
