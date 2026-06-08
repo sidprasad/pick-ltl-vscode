@@ -65,11 +65,10 @@
             ? viewState.promptHistory.slice(0, 5)
             : [];
         
-        // Random placeholder rotation
+        // Random placeholder rotation (example temporal properties)
         const placeholders = [
-            'e.g., January birthdays',
-            'e.g., T Shirt Sizes',
-            'e.g., Countries in North America'
+            'e.g., The red light (`r`) is on for zero or more states, and then turns off and remains off in the future.',
+            'e.g., The engine (`e`) is on in exactly one state, not necessarily the first.'
         ];
         
         // Set a random placeholder on load
