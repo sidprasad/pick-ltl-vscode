@@ -69,7 +69,7 @@ suite('PickController (LTL) Test Suite', () => {
 
     // One survivor with a positive vote -> converge.
     assert.strictEqual(controller.getState(), PickState.FINAL_RESULT);
-    assert.strictEqual(controller.getFinalRegex(), 'F a');
+    assert.strictEqual(controller.getFinalFormula(), 'F a');
   });
 
   test('REJECT vote: a candidate that accepts a rejected trace is penalized', async () => {
@@ -85,7 +85,7 @@ suite('PickController (LTL) Test Suite', () => {
 
     // No survivors -> final result with no formula.
     assert.strictEqual(controller.getState(), PickState.FINAL_RESULT);
-    assert.strictEqual(controller.getFinalRegex(), null);
+    assert.strictEqual(controller.getFinalFormula(), null);
   });
 
   test('UNSURE classifications do not change votes', async () => {

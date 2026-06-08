@@ -8,13 +8,13 @@ import { createLtlAnalyzer } from './ltlAnalyzer';
 import { openIssueReport } from './issueReporter';
 import { SurveyPrompt } from './surveyPrompt';
 
-interface RegexMatchVerifier {
+interface FormulaMatchVerifier {
   verifyMatch(word: string, pattern: string): boolean;
 }
 
 export function selectEdgeCaseSuggestions(
   candidates: LtlCandidate[],
-  analyzer: RegexMatchVerifier,
+  analyzer: FormulaMatchVerifier,
   maxSuggestions: number
 ): string[] {
   const maxAllowed = Math.min(6, Math.max(0, Math.trunc(maxSuggestions)));
@@ -31,12 +31,12 @@ export function selectEdgeCaseSuggestions(
 
   const uniqueWords = Array.from(new Set(allSuggestedWords));
 
-  const candidateRegexes = Array.from(new Set(candidates.map(candidate => candidate.formula)));
+  const candidateFormulas = Array.from(new Set(candidates.map(candidate => candidate.formula)));
   const stats = uniqueWords.map((word, index) => {
-    const matches = candidateRegexes.map(regex => analyzer.verifyMatch(word, regex));
+    const matches = candidateFormulas.map(formula => analyzer.verifyMatch(word, formula));
     const matchCount = matches.filter(Boolean).length;
     const nonMatchCount = matches.length - matchCount;
-    // Create a signature for the match pattern (e.g., "true,false,true" for 3 regexes)
+    // Create a signature for the match pattern (e.g., "true,false,true" for 3 formulas)
     const matchSignature = matches.join(',');
 
     return { word, index, matchCount, nonMatchCount, matchSignature };
@@ -47,7 +47,7 @@ export function selectEdgeCaseSuggestions(
   // But don't filter unmatched or all-matching words
   const seenDistinguishingSignatures = new Set<string>();
   const uniqueMatchStats = stats.filter(entry => {
-    // Don't filter unmatched words or words that match all regexes
+    // Don't filter unmatched words or words that match all formulas
     if (entry.matchCount === 0 || entry.nonMatchCount === 0) {
       return true;
     }
@@ -220,8 +220,8 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
           break;
         case 'copy':
           try {
-            await this.copyToClipboard(data.regex || '');
-            this.sendMessage({ type: 'copied', regex: data.regex });
+            await this.copyToClipboard(data.formula || '');
+            this.sendMessage({ type: 'copied', formula: data.formula });
           } catch (error) {
             logger.error(error, 'Failed to copy to clipboard');
             this.sendMessage({ type: 'error', message: 'Failed to copy to clipboard' });
@@ -523,19 +523,19 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      // Filter out invalid regexes and regexes with unsupported syntax
+      // Filter out invalid formulas and formulas with unsupported syntax
       const validCandidates: LtlCandidate[] = [];
       for (const candidate of candidates) {
-        const regex = candidate.formula;
-        const isValid = this.analyzer.isValidRegex(regex);
+        const formula = candidate.formula;
+        const isValid = this.analyzer.isValidFormula(formula);
         if (!isValid) {
-          logger.warn(`Filtered out invalid regex: "${regex}"`);
+          logger.warn(`Filtered out invalid formula: "${formula}"`);
           continue;
         }
 
-        const hasSupported = await this.analyzer.hasSupportedSyntax(regex);
+        const hasSupported = await this.analyzer.hasSupportedSyntax(formula);
         if (!hasSupported) {
-          logger.warn(`Filtered out regex with unsupported syntax: "${regex}"`);
+          logger.warn(`Filtered out formula with unsupported syntax: "${formula}"`);
           continue;
         }
 
@@ -551,16 +551,16 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       }
 
       if (validCandidates.length < candidates.length) {
-        logger.info(`Filtered out ${candidates.length - validCandidates.length} invalid or unsupported regex(es)`);
+        logger.info(`Filtered out ${candidates.length - validCandidates.length} invalid or unsupported formula(es)`);
       }
 
-      // Filter out equivalent/duplicate regexes
+      // Filter out equivalent/duplicate formulas
       this.sendMessage({ type: 'status', message: 'Filtering duplicate formulas...' });
       let uniqueCandidates: string[] = [];
       let equivalenceMap: Map<string, string[]> = new Map();
       try {
-        const deduped = await this.filterEquivalentRegexes(validCandidates.map(c => c.formula));
-        uniqueCandidates = deduped.uniqueRegexes;
+        const deduped = await this.filterEquivalentFormulas(validCandidates.map(c => c.formula));
+        uniqueCandidates = deduped.uniqueFormulas;
         equivalenceMap = deduped.equivalenceMap;
       } catch (error) {
         const errMsg = String(error);
@@ -613,9 +613,9 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       // Select top N candidates by confidence
       const config = vscode.workspace.getConfiguration('pick-ltl');
       const maxCandidates = config.get<number>('maxCandidates', 4);
-      const uniqueWithMeta = uniqueCandidates.map(regex => candidateMeta.get(regex)!);
+      const uniqueWithMeta = uniqueCandidates.map(formula => candidateMeta.get(formula)!);
       const topCandidates = selectTopCandidatesByConfidence(uniqueWithMeta, maxCandidates);
-      const finalCandidateRegexes = topCandidates.map(c => c.formula);
+      const finalCandidateFormulas = topCandidates.map(c => c.formula);
 
       // Check cancellation before initializing candidates
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
@@ -632,10 +632,10 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       const suggestedWords = this.collectEdgeCaseSuggestions(topCandidates);
 
-      const seeds = finalCandidateRegexes.map(regex => {
-        const meta = candidateMeta.get(regex);
+      const seeds = finalCandidateFormulas.map(formula => {
+        const meta = candidateMeta.get(formula);
         return {
-          pattern: regex,
+          pattern: formula,
           explanation: meta?.explanation,
           confidence: meta?.confidence
         };
@@ -643,10 +643,10 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       // Filter equivalence map to only include selected candidates
       const filteredEquivalenceMap = new Map<string, string[]>();
-      for (const regex of finalCandidateRegexes) {
-        const equivalents = equivalenceMap.get(regex);
+      for (const formula of finalCandidateFormulas) {
+        const equivalents = equivalenceMap.get(formula);
         if (equivalents) {
-          filteredEquivalenceMap.set(regex, equivalents);
+          filteredEquivalenceMap.set(formula, equivalents);
         }
       }
 
@@ -720,7 +720,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         if (hasClassifications) {
           // This happened after re-applying classifications during refinement
           this.sendMessage({ 
-            type: 'noRegexFound',
+            type: 'noFormulaFound',
             message: `All ${this.controller.getStatus().totalCandidates} candidate formulas were eliminated after re-applying your ${wordHistory.length} previous classification${wordHistory.length === 1 ? '' : 's'}. Try revising your prompt or starting fresh.`,
             candidateDetails: this.controller.getStatus().candidateDetails,
             wordsIn: wordHistory.filter(r => r.classification === 'accept').map(r => r.word),
@@ -1042,7 +1042,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       for (const candidate of data.candidates) {
         if (!candidate.formula || typeof candidate.formula !== 'string') {
-          logger.warn('Skipping candidate with missing or invalid regex');
+          logger.warn('Skipping candidate with missing or invalid formula');
           continue;
         }
 
@@ -1193,7 +1193,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
   private async handleFinalResult() {
     try {
-      const finalRegex = this.controller.getFinalRegex();
+      const finalFormula = this.controller.getFinalFormula();
       
       // Get the actual words the user classified
       const wordHistory = this.controller.getWordHistory();
@@ -1204,10 +1204,10 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         .filter(record => record.classification === 'reject')
         .map(record => record.word);
       
-      if (finalRegex === null) {
+      if (finalFormula === null) {
         // All candidates were eliminated - none are correct
         this.sendMessage({
-          type: 'noRegexFound',
+          type: 'noFormulaFound',
           message: 'No candidate formulas match your requirements.',
           candidateDetails: this.controller.getStatus().candidateDetails,
           wordsIn,
@@ -1225,11 +1225,11 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       // Get status to send along with the final result
       const status = this.controller.getStatus();
       
-      // Safety check: should never send finalResult with null regex
-      if (finalRegex === null) {
-        logger.error(new Error('Attempted to send finalResult with null regex'), 'Invalid state');
+      // Safety check: should never send finalResult with null formula
+      if (finalFormula === null) {
+        logger.error(new Error('Attempted to send finalResult with null formula'), 'Invalid state');
         this.sendMessage({
-          type: 'noRegexFound',
+          type: 'noFormulaFound',
           message: 'No candidate formulas match your requirements.',
           candidateDetails: status.candidateDetails,
           wordsIn,
@@ -1243,7 +1243,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       
       this.sendMessage({
         type: 'finalResult',
-        regex: finalRegex,
+        formula: finalFormula,
         wordsIn,
         wordsOut,
         status,
@@ -1423,19 +1423,19 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      // Filter out invalid regexes and regexes with unsupported syntax
+      // Filter out invalid formulas and formulas with unsupported syntax
       const validCandidates: LtlCandidate[] = [];
       for (const candidate of candidates) {
-        const regex = candidate.formula;
-        const isValid = this.analyzer.isValidRegex(regex);
+        const formula = candidate.formula;
+        const isValid = this.analyzer.isValidFormula(formula);
         if (!isValid) {
-          logger.warn(`Filtered out invalid regex: "${regex}"`);
+          logger.warn(`Filtered out invalid formula: "${formula}"`);
           continue;
         }
 
-        const hasSupported = await this.analyzer.hasSupportedSyntax(regex);
+        const hasSupported = await this.analyzer.hasSupportedSyntax(formula);
         if (!hasSupported) {
-          logger.warn(`Filtered out regex with unsupported syntax: "${regex}"`);
+          logger.warn(`Filtered out formula with unsupported syntax: "${formula}"`);
           continue;
         }
 
@@ -1451,16 +1451,16 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       }
 
       if (validCandidates.length < candidates.length) {
-        logger.info(`Filtered out ${candidates.length - validCandidates.length} invalid or unsupported regex(es)`);
+        logger.info(`Filtered out ${candidates.length - validCandidates.length} invalid or unsupported formula(es)`);
       }
 
-      // Filter out equivalent/duplicate regexes
+      // Filter out equivalent/duplicate formulas
       this.sendMessage({ type: 'status', message: 'Filtering duplicate formulas...' });
       let uniqueCandidates: string[] = [];
       let equivalenceMap: Map<string, string[]> = new Map();
       try {
-        const deduped = await this.filterEquivalentRegexes(validCandidates.map(c => c.formula));
-        uniqueCandidates = deduped.uniqueRegexes;
+        const deduped = await this.filterEquivalentFormulas(validCandidates.map(c => c.formula));
+        uniqueCandidates = deduped.uniqueFormulas;
         equivalenceMap = deduped.equivalenceMap;
       } catch (error) {
         const errMsg = String(error);
@@ -1513,9 +1513,9 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       // Select top N candidates by confidence
       const config = vscode.workspace.getConfiguration('pick-ltl');
       const maxCandidates = config.get<number>('maxCandidates', 4);
-      const uniqueWithMeta = uniqueCandidates.map(regex => candidateMeta.get(regex)!);
+      const uniqueWithMeta = uniqueCandidates.map(formula => candidateMeta.get(formula)!);
       const topCandidates = selectTopCandidatesByConfidence(uniqueWithMeta, maxCandidates);
-      const finalCandidateRegexes = topCandidates.map(c => c.formula);
+      const finalCandidateFormulas = topCandidates.map(c => c.formula);
 
       // Check cancellation before refining candidates
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
@@ -1538,10 +1538,10 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       const suggestedWords = this.collectEdgeCaseSuggestions(topCandidates);
 
-      const seeds = finalCandidateRegexes.map(regex => {
-        const meta = candidateMeta.get(regex);
+      const seeds = finalCandidateFormulas.map(formula => {
+        const meta = candidateMeta.get(formula);
         return {
-          pattern: regex,
+          pattern: formula,
           explanation: meta?.explanation,
           confidence: meta?.confidence
         };
@@ -1549,10 +1549,10 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       // Filter equivalence map to only include selected candidates
       const filteredEquivalenceMap = new Map<string, string[]>();
-      for (const regex of finalCandidateRegexes) {
-        const equivalents = equivalenceMap.get(regex);
+      for (const formula of finalCandidateFormulas) {
+        const equivalents = equivalenceMap.get(formula);
         if (equivalents) {
-          filteredEquivalenceMap.set(regex, equivalents);
+          filteredEquivalenceMap.set(formula, equivalents);
         }
       }
 
@@ -1651,7 +1651,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       : undefined;
 
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Equivalence check timeout - regex too complex')), timeoutMs)
+      setTimeout(() => reject(new Error('Equivalence check timeout - formula too complex')), timeoutMs)
     );
 
     const racers: Promise<boolean>[] = [equivalencePromise, timeoutPromise];
@@ -1663,38 +1663,38 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Filter out equivalent/duplicate regexes
+   * Filter out equivalent/duplicate formulas
    */
-  private async filterEquivalentRegexes(regexes: string[]): Promise<{ uniqueRegexes: string[]; equivalenceMap: Map<string, string[]>; }> {
+  private async filterEquivalentFormulas(formulas: string[]): Promise<{ uniqueFormulas: string[]; equivalenceMap: Map<string, string[]>; }> {
     // PASS 1: Fast exact string deduplication (preserving order)
     const seen = new Set<string>();
     const exactUnique: string[] = [];
     const duplicateBuckets = new Map<string, Set<string>>();
 
-    for (const regex of regexes) {
-      const bucket = duplicateBuckets.get(regex) ?? new Set<string>();
-      bucket.add(regex);
-      duplicateBuckets.set(regex, bucket);
+    for (const formula of formulas) {
+      const bucket = duplicateBuckets.get(formula) ?? new Set<string>();
+      bucket.add(formula);
+      duplicateBuckets.set(formula, bucket);
 
-      if (!seen.has(regex)) {
-        seen.add(regex);
-        exactUnique.push(regex);
+      if (!seen.has(formula)) {
+        seen.add(formula);
+        exactUnique.push(formula);
       }
     }
     
-    logger.info(`After exact deduplication: ${exactUnique.length}/${regexes.length} unique regexes`);
+    logger.info(`After exact deduplication: ${exactUnique.length}/${formulas.length} unique formulas`);
     
     if (exactUnique.length <= 1) {
       if (exactUnique.length === 1) {
         const duplicates = duplicateBuckets.get(exactUnique[0]) ?? new Set<string>();
         duplicates.delete(exactUnique[0]);
         return {
-          uniqueRegexes: exactUnique,
+          uniqueFormulas: exactUnique,
           equivalenceMap: new Map<string, string[]>([[exactUnique[0], Array.from(duplicates)]])
         };
       }
       return {
-        uniqueRegexes: exactUnique,
+        uniqueFormulas: exactUnique,
         equivalenceMap: new Map<string, string[]>()
       };
     }
@@ -1706,9 +1706,9 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
     let automataAnalysisFailures = 0;
 
     for (let i = 0; i < exactUnique.length; i++) {
-      const regex = exactUnique[i];
-      const duplicates = duplicateBuckets.get(regex) ?? new Set<string>();
-      duplicates.delete(regex);
+      const formula = exactUnique[i];
+      const duplicates = duplicateBuckets.get(formula) ?? new Set<string>();
+      duplicates.delete(formula);
 
       // Check cancellation
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
@@ -1718,7 +1718,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       let isEquivalent = false;
       let equivalentTo: string | undefined;
 
-      for (const uniqueRegex of unique) {
+      for (const uniqueFormula of unique) {
         // Check cancellation before each comparison
         if (this.cancellationTokenSource?.token.isCancellationRequested) {
           throw new Error('Filtering cancelled by user');
@@ -1726,13 +1726,13 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         
         // Direct automata-based equivalence check
         try {
-          logger.info(`Equivalence check: comparing "${regex}" vs "${uniqueRegex}"...`);
-          const equivalent = await this.checkEquivalenceWithTimeout(regex, uniqueRegex, 8000, this.cancellationTokenSource?.token);
+          logger.info(`Equivalence check: comparing "${formula}" vs "${uniqueFormula}"...`);
+          const equivalent = await this.checkEquivalenceWithTimeout(formula, uniqueFormula, 8000, this.cancellationTokenSource?.token);
 
           if (equivalent) {
-            logger.info(`Found equivalent: "${regex}" === "${uniqueRegex}"`);
+            logger.info(`Found equivalent: "${formula}" === "${uniqueFormula}"`);
             isEquivalent = true;
-            equivalentTo = uniqueRegex;
+            equivalentTo = uniqueFormula;
             break;
           }
         } catch (error) {
@@ -1742,37 +1742,37 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
           }
 
           // Equivalence analysis failed or timed out. Log and conservatively keep both.
-          logger.warn(`Equivalence analysis failed for "${regex}" vs "${uniqueRegex}": ${errMsg}`);
+          logger.warn(`Equivalence analysis failed for "${formula}" vs "${uniqueFormula}": ${errMsg}`);
           automataAnalysisFailures++;
         }
       }
 
       if (!isEquivalent) {
-        unique.push(regex);
-        equivalenceMap.set(regex, new Set<string>(duplicates));
-        logger.info(`Keeping unique regex: "${regex}" (${unique.length} total)`);
+        unique.push(formula);
+        equivalenceMap.set(formula, new Set<string>(duplicates));
+        logger.info(`Keeping unique formula: "${formula}" (${unique.length} total)`);
       } else if (equivalentTo) {
         const group = equivalenceMap.get(equivalentTo) ?? new Set<string>();
         duplicates.forEach(d => group.add(d));
-        group.add(regex);
+        group.add(formula);
         equivalenceMap.set(equivalentTo, group);
       }
     }
 
-    // Show warning if automata analysis failed for some regexes
+    // Show warning if automata analysis failed for some formulas
     if (automataAnalysisFailures > 0) {
-      const message = `Unexpected automata analysis failures (${automataAnalysisFailures}). Some regexes may not have been properly deduplicated.`;
+      const message = `Unexpected automata analysis failures (${automataAnalysisFailures}). Some formulas may not have been properly deduplicated.`;
       logger.warn(message);
     }
 
-    logger.info(`Final: ${unique.length}/${regexes.length} semantically unique regexes`);
+    logger.info(`Final: ${unique.length}/${formulas.length} semantically unique formulas`);
     const finalMap = new Map<string, string[]>();
-    for (const regex of unique) {
-      const equivalents = equivalenceMap.get(regex);
-      finalMap.set(regex, equivalents ? Array.from(equivalents) : []);
+    for (const formula of unique) {
+      const equivalents = equivalenceMap.get(formula);
+      finalMap.set(formula, equivalents ? Array.from(equivalents) : []);
     }
 
-    return { uniqueRegexes: unique, equivalenceMap: finalMap };
+    return { uniqueFormulas: unique, equivalenceMap: finalMap };
   }
 
   private sendMessage(message: any) {

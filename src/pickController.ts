@@ -2,7 +2,7 @@ import { createLtlAnalyzer, LtlAnalyzer } from './ltlAnalyzer';
 import * as vscode from 'vscode';
 import { logger } from './logger';
 
-interface CandidateRegex {
+interface CandidateFormula {
   pattern: string;
   explanation?: string;
   confidence?: number;
@@ -34,7 +34,7 @@ export interface WordClassificationRecord {
   word: string;
   classification: WordClassification;
   timestamp: number;
-  matchingRegexes: string[];
+  matchingFormulas: string[];
   source: 'pair' | 'direct';
 }
 
@@ -46,18 +46,18 @@ export enum PickState {
 }
 
 /**
- * Controller for the PICK interactive regex learning process
+ * Controller for the PICK interactive formula learning process
  */
 export class PickController {
   private analyzer: LtlAnalyzer;
-  private candidates: CandidateRegex[] = [];
+  private candidates: CandidateFormula[] = [];
   private usedWords = new Set<string>();
   private suggestedWordsQueue: string[] = [];
   private unmatchedSuggestionsUsed = 0;
   private state: PickState = PickState.INITIAL;
   private thresholdVotes = 2;
   private currentPair: WordPair | null = null;
-  private finalRegex: string | null = null;
+  private finalFormula: string | null = null;
   private wordHistory: WordClassificationRecord[] = [];
   private currentPrompt: string = '';
   private pairsWithoutProgress = 0;
@@ -109,7 +109,7 @@ export class PickController {
     return Math.max(1, Math.trunc(value));
   }
 
-  private hasMinimumPositiveVotes(candidate: CandidateRegex): boolean {
+  private hasMinimumPositiveVotes(candidate: CandidateFormula): boolean {
     return candidate.positiveVotes >= this.minPositiveVotesToSelect;
   }
 
@@ -196,7 +196,7 @@ export class PickController {
       eliminationThreshold: this.thresholdVotes,
       equivalents: equivalenceMap.get(candidate.pattern) ?? []
     }));
-    logger.info(`Initialized ${this.candidates.length} candidate regexes.`);
+    logger.info(`Initialized ${this.candidates.length} candidate formulas.`);
 
     await this.autoAdjustThreshold(normalizedCandidates.map(c => c.pattern), progressCallback);
 
@@ -244,7 +244,7 @@ export class PickController {
       eliminationThreshold: this.thresholdVotes,
       equivalents: equivalenceMap.get(candidate.pattern) ?? []
     }));
-    logger.info(`Initialized ${this.candidates.length} new candidate regexes.`);
+    logger.info(`Initialized ${this.candidates.length} new candidate formulas.`);
 
     // Set thresholds based on distinguishability BEFORE replaying votes
     await this.autoAdjustThreshold(normalizedCandidates.map(c => c.pattern), progressCallback);
@@ -331,7 +331,7 @@ export class PickController {
     }
 
     try {
-      const result = await this.analyzer.generateTwoDistinguishingWords(
+      const result = await this.analyzer.generateTwoDistinguishingTraces(
         activeCandidates,
         Array.from(this.usedWords),
         this.searchTimeoutMs,
@@ -409,8 +409,8 @@ export class PickController {
    * @param fromPair Whether this classification is part of the current pair flow
    */
   private applyClassification(word: string, classification: WordClassification, fromPair: boolean = false): void {
-    // Get matching regexes for this word (including eliminated candidates)
-    const matchingRegexes = this.candidates
+    // Get matching formulas for this word (including eliminated candidates)
+    const matchingFormulas = this.candidates
       .filter(c => this.analyzer.verifyMatch(word, c.pattern))
       .map(c => c.pattern);
 
@@ -422,7 +422,7 @@ export class PickController {
       word,
       classification,
       timestamp: Date.now(),
-      matchingRegexes,
+      matchingFormulas,
       source: fromPair ? 'pair' : 'direct'
     });
 
@@ -570,51 +570,51 @@ export class PickController {
 
     if (activeCount === 1) {
       logger.info(`checkFinalState: Branch - activeCount === 1`);
-      // Check if user has accepted a word that matches this regex
+      // Check if user has accepted a word that matches this formula
       const remainingPattern = activeCandidates[0];
       const remainingCandidate = this.candidates.find(candidate => candidate.pattern === remainingPattern);
       const positiveVotes = remainingCandidate?.positiveVotes ?? 0;
       const hasMinimumPositiveVotes = positiveVotes >= this.minPositiveVotesToSelect;
       
       if (hasMinimumPositiveVotes) {
-        // User has accepted enough matching words for the remaining regex - we're done!
+        // User has accepted enough matching words for the remaining formula - we're done!
         this.state = PickState.FINAL_RESULT;
-        this.finalRegex = remainingPattern;
+        this.finalFormula = remainingPattern;
         logger.info(
           `Converged to single candidate: "${remainingPattern}" with ${positiveVotes} positive vote(s).`
         );
       } else if (this.state === PickState.FINAL_RESULT) {
         // Was in final state but now we need more votes - reopen voting
         this.state = PickState.VOTING;
-        this.finalRegex = null;
+        this.finalFormula = null;
         this.currentPair = null; // Clear current pair to start fresh
         logger.info('Re-opening voting: single candidate remains but no accepted word matches it yet');
       }
     } else if (activeCount === 0) {
       logger.info(`checkFinalState: Branch - activeCount === 0`);
-      // All eliminated - NO REGEX IS CORRECT
+      // All eliminated - NO FORMULA IS CORRECT
       this.state = PickState.FINAL_RESULT;
-      this.finalRegex = null;
-      logger.info('All candidates eliminated - no correct regex found');
+      this.finalFormula = null;
+      logger.info('All candidates eliminated - no correct formula found');
     } else if (reachedMaxClassifications) {
       logger.info(`checkFinalState: Branch - reachedMaxClassifications (${totalClassifications}/${this.maxClassifications})`);
       // Hit maximum classification limit - force termination
       this.state = PickState.FINAL_RESULT;
       const best = this.selectBestCandidate();
-      this.finalRegex = best;
+      this.finalFormula = best;
       if (best) {
         logger.info(`Reached maximum classifications (${totalClassifications}/${this.maxClassifications}). Forcing termination with best candidate: "${best}"`);
       } else {
         logger.info(
           `Reached maximum classifications (${totalClassifications}/${this.maxClassifications}). ` +
-            `No candidate has reached the minimum positive vote threshold (${this.minPositiveVotesToSelect}); treating as no valid regex.`
+            `No candidate has reached the minimum positive vote threshold (${this.minPositiveVotesToSelect}); treating as no valid formula.`
         );
       }
     } else if (activeCount > 1 && this.state === PickState.FINAL_RESULT) {
       logger.info(`checkFinalState: Branch - activeCount > 1 && state === FINAL_RESULT`);
       // Was in final state but now we have multiple candidates again - reopen voting
       this.state = PickState.VOTING;
-      this.finalRegex = null;
+      this.finalFormula = null;
       this.currentPair = null; // Clear current pair to start fresh
       logger.info(`Re-opening voting: ${activeCount} active candidates remain after classification change`);
     } else {
@@ -701,7 +701,7 @@ export class PickController {
     // checkFinalState will set it back to FINAL_RESULT if appropriate
     if (this.state === PickState.FINAL_RESULT) {
       this.state = PickState.VOTING;
-      this.finalRegex = null;
+      this.finalFormula = null;
       this.currentPair = null;
       logger.info('Resetting state from FINAL_RESULT to VOTING for recalculation.');
     }
@@ -777,37 +777,37 @@ export class PickController {
   }
 
   /**
-   * Get the final regex (when state is FINAL_RESULT)
+   * Get the final formula (when state is FINAL_RESULT)
    */
-  getFinalRegex(): string | null {
-    return this.finalRegex;
+  getFinalFormula(): string | null {
+    return this.finalFormula;
   }
 
   /**
-   * Generate example words IN and OUT of the final regex
+   * Generate example words IN and OUT of the final formula
    */
   async generateFinalExamples(count: number = 5): Promise<{ wordsIn: string[]; wordsOut: string[] }> {
-    if (!this.finalRegex) {
-      throw new Error('No final regex available');
+    if (!this.finalFormula) {
+      throw new Error('No final formula available');
     }
 
     try {
-      logger.info(`Generating final examples for regex ${this.finalRegex}`);
+      logger.info(`Generating final examples for formula ${this.finalFormula}`);
       const wordsIn: string[] = [];
       const wordsOut: string[] = [];
       
-      // Generate words IN the regex
-      const inWords = (await this.analyzer.generateMultipleWords(
-        this.finalRegex,
+      // Generate words IN the formula
+      const inWords = (await this.analyzer.generateMultipleTraces(
+        this.finalFormula,
         count
       )).filter(w => !this.usedWords.has(w));
       wordsIn.push(...inWords);
       
-      // Generate words OUT of the regex
+      // Generate words OUT of the formula
       for (let i = 0; i < count; i++) {
         try {
-          const pair = await this.analyzer.generateWordPair(
-            this.finalRegex,
+          const pair = await this.analyzer.generateTracePair(
+            this.finalFormula,
             Array.from(this.usedWords)
           );
           if (!this.usedWords.has(pair.wordNotIn)) {
@@ -834,7 +834,7 @@ export class PickController {
     this.candidates = [];
     this.state = PickState.INITIAL;
     this.currentPair = null;
-    this.finalRegex = null;
+    this.finalFormula = null;
     this.pairsWithoutProgress = 0;
     this.lastActiveCandidateCount = 0;
     this.searchTimeoutMs = 2000;
@@ -878,10 +878,10 @@ export class PickController {
   }
 
   /**
-   * Manually finish and select the final regex
+   * Manually finish and select the final formula
    */
   finishSelection(): void {
-    this.finalRegex = this.selectBestCandidate();
+    this.finalFormula = this.selectBestCandidate();
     
     this.state = PickState.FINAL_RESULT;
   }
@@ -967,7 +967,7 @@ export class PickController {
   }
 
   /**
-   * Set the minimum number of positive votes required to select a final regex
+   * Set the minimum number of positive votes required to select a final formula
    */
   setMinimumPositiveVotesToSelect(limit: number): void {
     this.minPositiveVotesToSelect = this.clampMinimumPositiveVotesToSelect(limit);
@@ -975,7 +975,7 @@ export class PickController {
   }
 
   /**
-   * Get the minimum number of positive votes required to select a final regex
+   * Get the minimum number of positive votes required to select a final formula
    */
   getMinimumPositiveVotesToSelect(): number {
     return this.minPositiveVotesToSelect;
@@ -1025,17 +1025,17 @@ export class PickController {
     for (let i = 0; i < candidatePatterns.length && !foundMinThreshold; i++) {
       for (let j = i + 1; j < candidatePatterns.length && !foundMinThreshold; j++) {
         try {
-          // Add timeout to prevent hanging on complex regex comparisons
+          // Add timeout to prevent hanging on complex formula comparisons
           const timeoutPromise = new Promise<void>((_, reject) => {
             setTimeout(() => reject(new Error('Timeout')), 5000); // 5 second timeout per comparison
           });
           
           const countPromise = (async () => {
-            const countANotB = await this.analyzer.countWordsInANotInB(
+            const countANotB = await this.analyzer.countTracesInANotInB(
               candidatePatterns[i],
               candidatePatterns[j]
             );
-            const countBNotA = await this.analyzer.countWordsInANotInB(
+            const countBNotA = await this.analyzer.countTracesInANotInB(
               candidatePatterns[j],
               candidatePatterns[i]
             );

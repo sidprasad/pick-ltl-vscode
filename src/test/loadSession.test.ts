@@ -6,10 +6,10 @@ suite('Load Session Functionality', () => {
     // Test that valid session data structure is recognized
     const validSessionData = {
       candidates: [
-        { regex: '[a-z]+', explanation: 'lowercase letters', confidence: 0.9 }
+        { formula: '[a-z]+', explanation: 'lowercase letters', confidence: 0.9 }
       ],
       classifications: [
-        { word: 'abc', classification: 'in', matchingRegexes: ['[a-z]+'] }
+        { word: 'abc', classification: 'in', matchingFormulas: ['[a-z]+'] }
       ]
     };
 
@@ -43,7 +43,7 @@ suite('Load Session Functionality', () => {
   test('should handle empty classifications array', () => {
     const sessionData = {
       candidates: [
-        { regex: '[0-9]+', explanation: 'digits' }
+        { formula: '[0-9]+', explanation: 'digits' }
       ],
       classifications: []
     };
@@ -55,21 +55,21 @@ suite('Load Session Functionality', () => {
   test('should handle candidates with optional fields', () => {
     const sessionData = {
       candidates: [
-        { regex: '[a-z]+' }, // no explanation or confidence
-        { regex: '[0-9]+', explanation: 'digits' }, // no confidence
-        { regex: '[A-Z]+', confidence: 0.8 }, // no explanation
-        { regex: '\\w+', explanation: 'word chars', confidence: 0.9, equivalents: ['[a-zA-Z0-9_]+'] }
+        { formula: '[a-z]+' }, // no explanation or confidence
+        { formula: '[0-9]+', explanation: 'digits' }, // no confidence
+        { formula: '[A-Z]+', confidence: 0.8 }, // no explanation
+        { formula: '\\w+', explanation: 'word chars', confidence: 0.9, equivalents: ['[a-zA-Z0-9_]+'] }
       ],
       classifications: []
     };
 
     assert.strictEqual(sessionData.candidates.length, 4);
-    assert.ok(sessionData.candidates.every(c => typeof c.regex === 'string'));
+    assert.ok(sessionData.candidates.every(c => typeof c.formula === 'string'));
   });
 
   test('should validate equivalents field structure', () => {
     const candidate = {
-      regex: '\\w+',
+      formula: '\\w+',
       explanation: 'word characters',
       equivalents: ['[a-zA-Z0-9_]+', '[[:word:]]+']
     };
@@ -149,7 +149,7 @@ suite('Load Session Functionality', () => {
       prompt: 'US states that start with M',
       modelId: 'gpt-4',
       candidates: [
-        { regex: '^M\\w+', explanation: 'starts with M' }
+        { formula: '^M\\w+', explanation: 'starts with M' }
       ],
       classifications: [
         { word: 'Michigan', classification: 'in' }
@@ -164,9 +164,9 @@ suite('Load Session Functionality', () => {
 
   test('should handle session data without prompt and modelId (backwards compatibility)', () => {
     // Test that session data without prompt/modelId is still valid
-    const sessionWithoutPrompt: { candidates: { regex: string }[]; classifications: never[]; prompt?: string; modelId?: string } = {
+    const sessionWithoutPrompt: { candidates: { formula: string }[]; classifications: never[]; prompt?: string; modelId?: string } = {
       candidates: [
-        { regex: '[a-z]+' }
+        { formula: '[a-z]+' }
       ],
       classifications: []
     };
@@ -185,7 +185,7 @@ suite('Load Session Functionality', () => {
     const exportData = {
       prompt: null,
       modelId: null,
-      candidates: [{ regex: '\\d+' }],
+      candidates: [{ formula: '\\d+' }],
       classifications: []
     };
 

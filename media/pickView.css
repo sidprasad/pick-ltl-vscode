@@ -12,31 +12,31 @@
             /* make classification icons larger by default so Up/Down are prominent */
             --pick-icon-size: 18px;
             --pick-icon-stroke: 2.4;
-            /* regex highlighting surfaces */
-            --pick-regex-surface: var(--vscode-textCodeBlock-background,
+            /* formula highlighting surfaces */
+            --pick-formula-surface: var(--vscode-textCodeBlock-background,
                     color-mix(in srgb, var(--vscode-editor-background, #0f0f0f) 88%, var(--vscode-editor-foreground, #d4d4d4) 12%));
-            --pick-regex-border: color-mix(in srgb, var(--vscode-editor-foreground, #d4d4d4) 16%, transparent);
-            --pick-regex-foreground: var(--vscode-editor-foreground);
-            --pick-regex-muted: var(--vscode-descriptionForeground);
-            --pick-regex-char: var(--vscode-charts-purple,
-                    color-mix(in srgb, var(--pick-regex-foreground) 45%, #bb80b3 55%));
-            --pick-regex-keyword: var(--vscode-symbolIcon-keywordForeground,
-                    color-mix(in srgb, var(--pick-regex-foreground) 52%, #c586c0 48%));
-            --pick-regex-number: var(--vscode-symbolIcon-numberForeground,
-                    color-mix(in srgb, var(--pick-regex-foreground) 58%, #0e639c 42%));
-            --pick-regex-escape: var(--vscode-charts-yellow,
-                    color-mix(in srgb, var(--pick-regex-foreground) 58%, #cca700 42%));
-            --pick-regex-variable: var(--vscode-charts-blue,
-                    color-mix(in srgb, var(--pick-regex-foreground) 55%, #0078d4 45%));
+            --pick-formula-border: color-mix(in srgb, var(--vscode-editor-foreground, #d4d4d4) 16%, transparent);
+            --pick-formula-foreground: var(--vscode-editor-foreground);
+            --pick-formula-muted: var(--vscode-descriptionForeground);
+            --pick-formula-char: var(--vscode-charts-purple,
+                    color-mix(in srgb, var(--pick-formula-foreground) 45%, #bb80b3 55%));
+            --pick-formula-keyword: var(--vscode-symbolIcon-keywordForeground,
+                    color-mix(in srgb, var(--pick-formula-foreground) 52%, #c586c0 48%));
+            --pick-formula-number: var(--vscode-symbolIcon-numberForeground,
+                    color-mix(in srgb, var(--pick-formula-foreground) 58%, #0e639c 42%));
+            --pick-formula-escape: var(--vscode-charts-yellow,
+                    color-mix(in srgb, var(--pick-formula-foreground) 58%, #cca700 42%));
+            --pick-formula-variable: var(--vscode-charts-blue,
+                    color-mix(in srgb, var(--pick-formula-foreground) 55%, #0078d4 45%));
         }
 
         body.vscode-light {
             /* Light themes need more body to the highlight and a subtle outline */
             --pick-diff-bg: color-mix(in srgb, var(--vscode-editor-selectionBackground, #cfe8ff) 90%, white);
             --pick-diff-border: color-mix(in srgb, var(--vscode-editor-foreground, #1a1a1a) 20%, transparent);
-            --pick-regex-surface: color-mix(in srgb, var(--vscode-textCodeBlock-background, #ffffff) 82%, white 18%);
-            --pick-regex-border: color-mix(in srgb, var(--vscode-editor-foreground, #1a1a1a) 12%, transparent);
-            --pick-regex-muted: color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 86%, var(--vscode-editor-foreground, #1a1a1a) 14%);
+            --pick-formula-surface: color-mix(in srgb, var(--vscode-textCodeBlock-background, #ffffff) 82%, white 18%);
+            --pick-formula-border: color-mix(in srgb, var(--vscode-editor-foreground, #1a1a1a) 12%, transparent);
+            --pick-formula-muted: color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 86%, var(--vscode-editor-foreground, #1a1a1a) 14%);
         }
 
         body.vscode-high-contrast,
@@ -45,8 +45,8 @@
             --pick-diff-bg: color-mix(in srgb, var(--vscode-editor-background, transparent) 36%, transparent);
             --pick-diff-border: var(--vscode-contrastActiveBorder, var(--vscode-foreground));
             --pick-diff-text: var(--vscode-editor-foreground);
-            --pick-regex-surface: color-mix(in srgb, var(--vscode-editor-background, transparent) 40%, transparent);
-            --pick-regex-border: var(--vscode-contrastActiveBorder, var(--vscode-foreground));
+            --pick-formula-surface: color-mix(in srgb, var(--vscode-editor-background, transparent) 40%, transparent);
+            --pick-formula-border: var(--vscode-contrastActiveBorder, var(--vscode-foreground));
         }
 
         body {
@@ -673,9 +673,9 @@
         }
 
         .btn.copy {
-            color: var(--pick-regex-foreground);
-            background: color-mix(in srgb, var(--pick-regex-surface) 86%, transparent);
-            border-color: var(--pick-regex-border);
+            color: var(--pick-formula-foreground);
+            background: color-mix(in srgb, var(--pick-formula-surface) 86%, transparent);
+            border-color: var(--pick-formula-border);
         }
 
         .status-bar {
@@ -764,16 +764,16 @@
         .candidate-item {
             padding: 8px;
             margin: 6px 0;
-            background: var(--pick-regex-surface);
-            border: 1px solid var(--pick-regex-border);
+            background: var(--pick-formula-surface);
+            border: 1px solid var(--pick-formula-border);
             border-radius: 6px;
             font-family: monospace;
             display: flex;
             flex-direction: column;
             align-items: stretch;
             gap: 6px;
-            color: var(--pick-regex-foreground);
-            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pick-regex-foreground) 3%, transparent);
+            color: var(--pick-formula-foreground);
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pick-formula-foreground) 3%, transparent);
         }
 
         .candidate-header {
@@ -794,8 +794,8 @@
         .candidate-item.eliminated {
             opacity: 0.82;
             border-style: dashed;
-            border-color: color-mix(in srgb, var(--pick-reject-color) 40%, var(--pick-regex-border));
-            background: color-mix(in srgb, var(--pick-regex-surface) 94%, var(--pick-reject-color) 6%);
+            border-color: color-mix(in srgb, var(--pick-reject-color) 40%, var(--pick-formula-border));
+            background: color-mix(in srgb, var(--pick-formula-surface) 94%, var(--pick-reject-color) 6%);
         }
 
         .candidate-item.eliminated .candidate-pattern {
@@ -804,30 +804,30 @@
         }
 
         .candidate-item.active {
-            background: var(--pick-regex-surface);
-            border-color: var(--vscode-focusBorder, var(--pick-regex-border));
+            background: var(--pick-formula-surface);
+            border-color: var(--vscode-focusBorder, var(--pick-formula-border));
             /* remove heavy left accent to avoid a sidebar effect */
             border-left: none;
-            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pick-regex-foreground) 6%, transparent);
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pick-formula-foreground) 6%, transparent);
         }
 
-        .candidate-pattern code.regex-syntax {
+        .candidate-pattern code.formula-syntax {
             display: inline-block;
             padding: 2px 6px;
             border-radius: 5px;
-            background: var(--pick-regex-surface);
-            border: 1px solid var(--pick-regex-border);
-            color: var(--pick-regex-foreground);
-            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pick-regex-foreground) 4%, transparent);
+            background: var(--pick-formula-surface);
+            border: 1px solid var(--pick-formula-border);
+            color: var(--pick-formula-foreground);
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pick-formula-foreground) 4%, transparent);
         }
 
         .candidate-info {
             margin-top: 4px;
             padding: 8px;
             border-radius: 6px;
-            border: 1px solid var(--pick-regex-border);
-            background: var(--pick-regex-surface);
-            color: var(--pick-regex-muted);
+            border: 1px solid var(--pick-formula-border);
+            background: var(--pick-formula-surface);
+            color: var(--pick-formula-muted);
             font-family: var(--vscode-font-family);
             line-height: 1.4;
         }
@@ -847,7 +847,7 @@
         }
 
         .candidate-info strong {
-            color: var(--pick-regex-foreground);
+            color: var(--pick-formula-foreground);
         }
 
         .candidate-info-btn {
@@ -947,17 +947,17 @@
             text-align: center;
         }
 
-        .regex-display {
+        .formula-display {
             font-size: 1.5em;
             font-family: monospace;
             padding: 15px;
-            background: var(--pick-regex-surface);
-            border: 1px solid var(--pick-regex-border);
+            background: var(--pick-formula-surface);
+            border: 1px solid var(--pick-formula-border);
             border-radius: 6px;
             margin: 15px 0;
             overflow-x: auto;
             white-space: nowrap;
-            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pick-regex-foreground) 4%, transparent);
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pick-formula-foreground) 4%, transparent);
         }
 
         .examples {
@@ -1624,72 +1624,72 @@
             border-color: var(--vscode-focusBorder);
         }
 
-        .regex-syntax {
+        .formula-syntax {
             font-family: monospace;
             font-size: 1.05em;
             line-height: 1.35;
             white-space: pre;
             background: transparent;
-            color: var(--pick-regex-foreground);
+            color: var(--pick-formula-foreground);
         }
 
-        /* Prism token theming for regex */
-        .regex-syntax .token.char-class,
-        .regex-syntax .token.char-set {
-            color: var(--pick-regex-char);
+        /* Prism token theming for formula */
+        .formula-syntax .token.char-class,
+        .formula-syntax .token.char-set {
+            color: var(--pick-formula-char);
         }
 
-        .regex-syntax .token.char-class-negation,
-        .regex-syntax .token.range,
-        .regex-syntax .token.range-punctuation,
-        .regex-syntax .token.operator,
-        .regex-syntax .token.keyword,
-        .regex-syntax .token.anchor,
-        .regex-syntax .token.alternation {
-            color: var(--pick-regex-keyword);
+        .formula-syntax .token.char-class-negation,
+        .formula-syntax .token.range,
+        .formula-syntax .token.range-punctuation,
+        .formula-syntax .token.operator,
+        .formula-syntax .token.keyword,
+        .formula-syntax .token.anchor,
+        .formula-syntax .token.alternation {
+            color: var(--pick-formula-keyword);
             font-weight: 600;
         }
 
-        .regex-syntax .token.quantifier,
-        .regex-syntax .token.number {
-            color: var(--pick-regex-number);
+        .formula-syntax .token.quantifier,
+        .formula-syntax .token.number {
+            color: var(--pick-formula-number);
             font-weight: 600;
         }
 
-        .regex-syntax .token.escape,
-        .regex-syntax .token.special-escape {
-            color: var(--pick-regex-escape);
+        .formula-syntax .token.escape,
+        .formula-syntax .token.special-escape {
+            color: var(--pick-formula-escape);
         }
 
-        .regex-syntax .token.variable,
-        .regex-syntax .token.group-name,
-        .regex-syntax .token.backreference {
-            color: var(--pick-regex-variable);
+        .formula-syntax .token.variable,
+        .formula-syntax .token.group-name,
+        .formula-syntax .token.backreference {
+            color: var(--pick-formula-variable);
             font-weight: 600;
         }
 
-        .regex-syntax .token.punctuation {
-            color: var(--pick-regex-muted);
+        .formula-syntax .token.punctuation {
+            color: var(--pick-formula-muted);
         }
 
         /* Ensure copy buttons and icons stay visible against the code surface */
         .candidate-header .icon-btn,
-        .regex-display .icon-btn {
-            color: var(--pick-regex-foreground);
-            background: color-mix(in srgb, var(--pick-regex-foreground) 6%, transparent);
-            border-color: var(--pick-regex-border);
+        .formula-display .icon-btn {
+            color: var(--pick-formula-foreground);
+            background: color-mix(in srgb, var(--pick-formula-foreground) 6%, transparent);
+            border-color: var(--pick-formula-border);
             opacity: 0.9;
         }
 
         .candidate-header .icon-btn:hover,
-        .regex-display .icon-btn:hover {
+        .formula-display .icon-btn:hover {
             opacity: 1;
-            background: color-mix(in srgb, var(--pick-regex-foreground) 12%, transparent);
+            background: color-mix(in srgb, var(--pick-formula-foreground) 12%, transparent);
         }
 
         .candidate-header .codicon,
-        .regex-display .codicon {
-            color: var(--pick-regex-foreground);
+        .formula-display .codicon {
+            color: var(--pick-formula-foreground);
         }
 
         /* Modal styles */

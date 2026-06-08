@@ -2,10 +2,10 @@ import { logger } from './logger';
 
 /**
  * Engine bridge to @sidprasad/ltl-ts (pure-TS LTL engine), the drop-in
- * replacement for the regex extension's @gruhn/regex-utils bridge.
+ * replacement for the formula extension's @gruhn/formula-utils bridge.
  *
- * Method names mirror the old RegexAnalyzer so the PICK controller changes
- * minimally, but "word" now means a Spot lasso trace string and "regex" an LTL
+ * Method names mirror the old FormulaAnalyzer so the PICK controller changes
+ * minimally, but "word" now means a Spot lasso trace string and "formula" an LTL
  * formula string.
  *
  * The engine is ESM; we load it once via dynamic import and cache it so that
@@ -52,13 +52,13 @@ async function loadLtl(): Promise<LtlModule> {
   return cachedModule;
 }
 
-export interface WordPairResult {
+export interface TracePairResult {
   wordIn: string;
   wordNotIn: string;
   explanation?: string;
 }
 
-export interface TwoDistinguishingWordsResult {
+export interface TwoDistinguishingTracesResult {
   words: [string, string];
   explanation: string;
   properties?: string[];
@@ -85,7 +85,7 @@ export class LtlAnalyzer {
   }
 
   /** Is this a syntactically valid LTL formula? */
-  isValidRegex(formula: string): boolean {
+  isValidFormula(formula: string): boolean {
     try {
       this.mod().parseFormula(formula);
       return true;
@@ -94,7 +94,7 @@ export class LtlAnalyzer {
     }
   }
 
-  /** Async alias of isValidRegex (the engine supports the full grammar). */
+  /** Async alias of isValidFormula (the engine supports the full grammar). */
   async hasSupportedSyntax(formula: string): Promise<boolean> {
     try {
       const { parseFormula } = await loadLtl();
@@ -127,23 +127,23 @@ export class LtlAnalyzer {
   }
 
   /**
-   * Distinguishability proxy (replaces regex set-difference cardinality).
+   * Distinguishability proxy (replaces formula set-difference cardinality).
    * Returns 1n if some trace satisfies A but not B (A ⊄ B), else 0n.
    * Used by the controller's threshold heuristic, which sums these over peers.
    */
-  async countWordsInANotInB(formulaA: string, formulaB: string): Promise<bigint | undefined> {
+  async countTracesInANotInB(formulaA: string, formulaB: string): Promise<bigint | undefined> {
     try {
       const { isSufficientFor } = await loadLtl();
       // |A \ B| > 0  iff  A does NOT imply B
       return isSufficientFor(formulaA, formulaB) ? 0n : 1n;
     } catch (error) {
-      logger.warn(`countWordsInANotInB failed for '${formulaA}' \\ '${formulaB}': ${error}`);
+      logger.warn(`countTracesInANotInB failed for '${formulaA}' \\ '${formulaB}': ${error}`);
       return undefined;
     }
   }
 
   /** Generate one trace that satisfies the formula and one that does not. */
-  async generateWordPair(formula: string, excludedWords: string[] = []): Promise<WordPairResult> {
+  async generateTracePair(formula: string, excludedWords: string[] = []): Promise<TracePairResult> {
     const { getSatisfyingTrace, NoSatisfyingTraceError } = await loadLtl();
 
     let wordIn = '';
@@ -177,7 +177,7 @@ export class LtlAnalyzer {
   }
 
   /** Generate multiple distinct traces satisfying the formula. */
-  async generateMultipleWords(
+  async generateMultipleTraces(
     formula: string,
     count: number,
     excludedWords: string[] = []
@@ -205,12 +205,12 @@ export class LtlAnalyzer {
    * the pairwise selection internally; there is no timeout/poolSize.
    * (Extra params kept for signature compatibility with the old analyzer.)
    */
-  async generateTwoDistinguishingWords(
+  async generateTwoDistinguishingTraces(
     candidateFormulas: string[],
     excludedWords: string[] = [],
     _timeoutMs?: number,
     _poolSizeLimit?: number
-  ): Promise<TwoDistinguishingWordsResult> {
+  ): Promise<TwoDistinguishingTracesResult> {
     if (candidateFormulas.length === 0) {
       throw new Error('Need at least one candidate formula');
     }
@@ -224,7 +224,7 @@ export class LtlAnalyzer {
   }
 
   /**
-   * Synthesize a formula from classified traces (no regex analogue).
+   * Synthesize a formula from classified traces (no formula analogue).
    * Returns null if no consistent formula is found within the engine's bound.
    */
   async synthesizeFormula(

@@ -6,7 +6,7 @@
 
 PICK (Pairwise Iterative-Choice Knockout) helps you make smart use of generative AI to author **Linear Temporal Logic (LTL)** formulas. You describe a temporal property in natural language; PICK proposes several candidate formulas and helps you converge on the one you actually mean by classifying concrete example **traces**.
 
-This is the LTL counterpart of PICK-Regex. The formal analysis runs entirely in TypeScript via the [`@sidprasad/ltl-ts`](https://github.com/sidprasad/ltl-ts) engine — **no Python and no SPOT dependency** — so it runs anywhere VS Code does.
+This is the LTL counterpart of PICK-Formula. The formal analysis runs entirely in TypeScript via the [`@sidprasad/ltl-ts`](https://github.com/sidprasad/ltl-ts) engine — **no Python and no SPOT dependency** — so it runs anywhere VS Code does.
 
 ---
 

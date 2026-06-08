@@ -1,5 +1,5 @@
 /**
- * PICK Regex Builder - Webview JavaScript
+ * PICK Formula Builder - Webview JavaScript
  * 
  * This file contains all the client-side logic for the PICK webview interface.
  * It must be initialized with the VS Code API object from the webview context.
@@ -159,7 +159,7 @@
         const loadSessionFilePrompt = document.getElementById('loadSessionFilePrompt');
         const loadSessionStatus = document.getElementById('loadSessionStatus');
         const historyCopyStatus = document.getElementById('historyCopyStatus');
-        const finalRegex = document.getElementById('finalRegex');
+        const finalFormula = document.getElementById('finalFormula');
         const wordsIn = document.getElementById('wordsIn');
         const wordsOut = document.getElementById('wordsOut');
         const wordEditHint = document.getElementById('wordEditHint');
@@ -927,9 +927,9 @@
             updatePromptDisplay(currentPrompt);
         }
 
-        function copyRegex(pattern) {
+        function copyFormula(pattern) {
             try {
-                vscode.postMessage({ type: 'copy', regex: pattern });
+                vscode.postMessage({ type: 'copy', formula: pattern });
             } catch (e) {
                 showError('Unable to copy.');
             }
@@ -1047,22 +1047,22 @@
             return spans.join('');
         }
 
-        function highlightRegex(pattern) {
+        function highlightFormula(pattern) {
             if (!pattern) {
                 return '';
             }
 
-            if (window.Prism && Prism.languages && Prism.languages.regex) {
+            if (window.Prism && Prism.languages && Prism.languages.formula) {
                 try {
-                    const highlighted = Prism.highlight(pattern, Prism.languages.regex, 'regex');
-                    return '<code class="regex-syntax language-regex">' + highlighted + '</code>';
+                    const highlighted = Prism.highlight(pattern, Prism.languages.formula, 'formula');
+                    return '<code class="formula-syntax language-formula">' + highlighted + '</code>';
                 } catch (err) {
                     log('warn', 'Prism highlight failed: ' + String(err));
                 }
             }
 
             // Fallback: simple escaped text if Prism isn't available
-            return '<code class="regex-syntax">' + escapeHtml(pattern) + '</code>';
+            return '<code class="formula-syntax">' + escapeHtml(pattern) + '</code>';
         }
 
         /**
@@ -1084,7 +1084,7 @@
         }
 
         /**
-         * Build a small popover listing regexes that matched a word.
+         * Build a small popover listing formulas that matched a word.
          */
         function buildMatchPopover(matches, headingText) {
             const popover = document.createElement('div');
@@ -1172,13 +1172,13 @@
                 
                 const patternSpan = document.createElement('span');
                 patternSpan.className = 'equivalent-pattern-text';
-                patternSpan.innerHTML = highlightRegex(eq);
+                patternSpan.innerHTML = highlightFormula(eq);
                 
                 const copyBtn = document.createElement('button');
                 copyBtn.className = 'btn copy';
                 copyBtn.setAttribute('data-pattern', encodeURIComponent(eq));
                 copyBtn.setAttribute('title', 'Copy alternative formula');
-                copyBtn.onclick = function() { copyRegex(decodeURIComponent(this.getAttribute('data-pattern'))); };
+                copyBtn.onclick = function() { copyFormula(decodeURIComponent(this.getAttribute('data-pattern'))); };
                 copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
                     '<path d="M16 1H4a2 2 0 0 0-2 2v12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
                     '<rect x="8" y="5" width="12" height="14" rx="2" stroke="currentColor" stroke-width="1.6"/>' +
@@ -1474,7 +1474,7 @@
                         latestCandidates = message.status.candidateDetails.slice();
                     }
                     if (message.historyRenderData) { lastHistoryRenderData = Object.assign({}, lastHistoryRenderData, message.historyRenderData); }
-                    showFinalResultWithContext(message.regex, message.wordsIn, message.wordsOut, message.status);
+                    showFinalResultWithContext(message.formula, message.wordsIn, message.wordsOut, message.status);
                     break;
                 case 'copied':
                     showStatusWithoutCancel('Copied to clipboard');
@@ -1482,12 +1482,12 @@
                         clearStatusMessage();
                     }, 2000);
                     break;
-                case 'noRegexFound':
+                case 'noFormulaFound':
                     if (Array.isArray(message.candidateDetails)) {
                         latestCandidates = message.candidateDetails.slice();
                     }
                     if (message.historyRenderData) { lastHistoryRenderData = Object.assign({}, lastHistoryRenderData, message.historyRenderData); }
-                    showNoRegexFound(message.message, message.candidateDetails, message.wordsIn, message.wordsOut, message.wordHistory);
+                    showNoFormulaFound(message.message, message.candidateDetails, message.wordsIn, message.wordsOut, message.wordHistory);
                     break;
                 case 'insufficientWords':
                     showInsufficientWords(message.candidates, message.status);
@@ -1839,7 +1839,7 @@
 
                 const patternSpan = document.createElement('span');
                 patternSpan.className = 'candidate-pattern';
-                patternSpan.innerHTML = highlightRegex(c.pattern);
+                patternSpan.innerHTML = highlightFormula(c.pattern);
 
                 const votesContainer = document.createElement('div');
                 votesContainer.className = 'candidate-votes';
@@ -1849,7 +1849,7 @@
                 copyBtn.className = 'btn copy';
                 copyBtn.setAttribute('data-pattern', encodeURIComponent(c.pattern));
                 copyBtn.setAttribute('title', 'Copy formula');
-                copyBtn.onclick = function() { copyRegex(decodeURIComponent(this.getAttribute('data-pattern'))); };
+                copyBtn.onclick = function() { copyFormula(decodeURIComponent(this.getAttribute('data-pattern'))); };
                 copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
                     '<path d="M16 1H4a2 2 0 0 0-2 2v12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
                     '<rect x="8" y="5" width="12" height="14" rx="2" stroke="currentColor" stroke-width="1.6"/>' +
@@ -1888,7 +1888,7 @@
             });
         }
 
-        function updateCandidatesWithWinner(candidates, threshold, winnerRegex) {
+        function updateCandidatesWithWinner(candidates, threshold, winnerFormula) {
             candidatesList.innerHTML = '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">' +
                 '<h4 style="margin:0">LTL Candidates</h4>' +
                 '<button id="candidatesHelpBtn" class="icon-btn" title="Where do these candidates come from?" aria-haspopup="dialog" aria-controls="candidatesHelpModal">?</button>' +
@@ -1923,7 +1923,7 @@
             }
 
             candidates.forEach(function(c) {
-                const isWinner = c.pattern === winnerRegex;
+                const isWinner = c.pattern === winnerFormula;
                 const div = document.createElement('div');
                 div.className = 'candidate-item ' + (c.eliminated ? 'eliminated' : 'active');
 
@@ -1936,7 +1936,7 @@
 
                 const patternSpan = document.createElement('span');
                 patternSpan.className = 'candidate-pattern';
-                patternSpan.innerHTML = highlightRegex(c.pattern);
+                patternSpan.innerHTML = highlightFormula(c.pattern);
 
                 const votesDiv = document.createElement('div');
                 votesDiv.className = 'candidate-votes';
@@ -1948,7 +1948,7 @@
                 copyBtn.className = 'btn copy';
                 copyBtn.setAttribute('data-pattern', encodeURIComponent(c.pattern));
                 copyBtn.setAttribute('title', 'Copy formula');
-                copyBtn.onclick = function() { copyRegex(decodeURIComponent(this.getAttribute('data-pattern'))); };
+                copyBtn.onclick = function() { copyFormula(decodeURIComponent(this.getAttribute('data-pattern'))); };
                 if (isWinner) {
                     copyBtn.style.border = '1px solid var(--pick-accept-color)';
                 }
@@ -2306,7 +2306,7 @@
                 modelId: latestActiveModelId || null,
                 candidates: latestCandidates.map(function(candidate) {
                     const candidateInfo = {
-                        regex: candidate.pattern,
+                        formula: candidate.pattern,
                         explanation: candidate.explanation || null,
                         confidence: candidate.confidence !== undefined ? candidate.confidence : null
                     };
@@ -2320,7 +2320,7 @@
                     return {
                         word: item.word,
                         classification: normalizeClassificationForExport(item.classification),
-                        matchingRegexes: Array.isArray(item.matchingRegexes) ? item.matchingRegexes : []
+                        matchingFormulas: Array.isArray(item.matchingFormulas) ? item.matchingFormulas : []
                     };
                 })
             };
@@ -2386,7 +2386,7 @@
 
                 // Quick match info toggle in the top-left corner
                 const matchInfo = createMatchInfoControls(
-                    item.matchingRegexes,
+                    item.matchingFormulas,
                     `Matching candidates for "${item.word}"`,
                     'history-info-btn'
                 );
@@ -2430,7 +2430,7 @@
                 const matchesHeader = document.createElement('div');
                 matchesHeader.className = 'history-matches__header';
 
-                const matchCount = item.matchingRegexes.length;
+                const matchCount = item.matchingFormulas.length;
 
                 if (matchCount > 0) {
                     const toggleButton = document.createElement('button');
@@ -2445,7 +2445,7 @@
                     const list = document.createElement('ul');
                     list.className = 'match-list';
 
-                    item.matchingRegexes.forEach(pattern => {
+                    item.matchingFormulas.forEach(pattern => {
                         const listItem = document.createElement('li');
                         const code = document.createElement('code');
                         code.textContent = pattern;
@@ -2574,7 +2574,7 @@
                 }
 
                 const matches = record
-                    ? (Array.isArray(record.matchingRegexes) ? record.matchingRegexes : [])
+                    ? (Array.isArray(record.matchingFormulas) ? record.matchingFormulas : [])
                     : (fallbackMatches?.get(word) ?? []);
 
                 const existingBtn = card.querySelector('.word-info-btn');
@@ -2629,11 +2629,11 @@
             wordHistory.insertBefore(notice, historyItems);
         }
 
-        function showFinalResultWithContext(regex, inWords, outWords, status) {
-            // Defensive check: if regex is null/undefined, treat as noRegexFound
-            if (!regex) {
-                console.warn('showFinalResultWithContext called with null/undefined regex, redirecting to showNoRegexFound');
-                showNoRegexFound(
+        function showFinalResultWithContext(formula, inWords, outWords, status) {
+            // Defensive check: if formula is null/undefined, treat as noFormulaFound
+            if (!formula) {
+                console.warn('showFinalResultWithContext called with null/undefined formula, redirecting to showNoFormulaFound');
+                showNoFormulaFound(
                     'No candidate formula matches your requirements.',
                     status ? status.candidateDetails : [],
                     inWords,
@@ -2656,14 +2656,14 @@
                 '</div>';
 
             if (status) {
-                updateCandidatesWithWinner(status.candidateDetails, status.threshold, regex);
+                updateCandidatesWithWinner(status.candidateDetails, status.threshold, formula);
                 updateWordHistory(status.wordHistory);
             }
 
             showStatusWithoutCancel('Classification complete! Selected formula highlighted below.');
         }
 
-        function showNoRegexFound(message, candidateDetails, inWords, outWords, wordHistory) {
+        function showNoFormulaFound(message, candidateDetails, inWords, outWords, wordHistory) {
             // Keep the classification history visible so users can re-classify and iterate
             showSection('voting');
             if (statusMessage) {
@@ -2713,12 +2713,12 @@
                     ...(Array.isArray(inWords) ? inWords.map(word => ({
                         word,
                         classification: 'accept',
-                        matchingRegexes: []
+                        matchingFormulas: []
                     })) : []),
                     ...(Array.isArray(outWords) ? outWords.map(word => ({
                         word,
                         classification: 'reject',
-                        matchingRegexes: []
+                        matchingFormulas: []
                     })) : [])
                 ];
 
@@ -2832,9 +2832,9 @@
 
         // Functions no longer need to be global since we use addEventListener instead of inline handlers
         // Keeping for backwards compatibility or debugging if needed
-        window.copyRegex = copyRegex;
+        window.copyFormula = copyFormula;
         window.toLiteralString = toLiteralString;
-        window.highlightRegex = highlightRegex;
+        window.highlightFormula = highlightFormula;
         
         // Notify the extension that the webview is ready
         vscode.postMessage({ type: 'webviewReady' });

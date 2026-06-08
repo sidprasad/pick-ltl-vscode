@@ -15,11 +15,11 @@ suite('LtlAnalyzer Test Suite', () => {
     assert.strictEqual(analyzer.verifyMatch('!a;cycle{a}', 'F a'), true);
   });
 
-  test('isValidRegex: LTL syntax validation', () => {
-    assert.strictEqual(analyzer.isValidRegex('G (a -> F b)'), true);
-    assert.strictEqual(analyzer.isValidRegex('a U b'), true);
-    assert.strictEqual(analyzer.isValidRegex('(a'), false);
-    assert.strictEqual(analyzer.isValidRegex('-> b'), false);
+  test('isValidFormula: LTL syntax validation', () => {
+    assert.strictEqual(analyzer.isValidFormula('G (a -> F b)'), true);
+    assert.strictEqual(analyzer.isValidFormula('a U b'), true);
+    assert.strictEqual(analyzer.isValidFormula('(a'), false);
+    assert.strictEqual(analyzer.isValidFormula('-> b'), false);
   });
 
   test('areEquivalent', async () => {
@@ -28,21 +28,21 @@ suite('LtlAnalyzer Test Suite', () => {
     assert.strictEqual(await analyzer.areEquivalent('G a', 'F a'), false);
   });
 
-  test('countWordsInANotInB: distinguishability proxy', async () => {
+  test('countTracesInANotInB: distinguishability proxy', async () => {
     // G a implies F a, so |G a \ F a| == 0
-    assert.strictEqual(await analyzer.countWordsInANotInB('G a', 'F a'), 0n);
+    assert.strictEqual(await analyzer.countTracesInANotInB('G a', 'F a'), 0n);
     // F a does NOT imply G a, so |F a \ G a| > 0
-    assert.strictEqual(await analyzer.countWordsInANotInB('F a', 'G a'), 1n);
+    assert.strictEqual(await analyzer.countTracesInANotInB('F a', 'G a'), 1n);
   });
 
-  test('generateTwoDistinguishingWords', async () => {
-    const r = await analyzer.generateTwoDistinguishingWords(['F a', 'G a']);
+  test('generateTwoDistinguishingTraces', async () => {
+    const r = await analyzer.generateTwoDistinguishingTraces(['F a', 'G a']);
     assert.strictEqual(r.words.length, 2);
     assert.notStrictEqual(r.words[0], r.words[1]);
   });
 
-  test('generateWordPair: one satisfies, one does not', async () => {
-    const p = await analyzer.generateWordPair('F a');
+  test('generateTracePair: one satisfies, one does not', async () => {
+    const p = await analyzer.generateTracePair('F a');
     assert.ok(analyzer.verifyMatch(p.wordIn, 'F a'), 'wordIn should satisfy F a');
     assert.ok(!analyzer.verifyMatch(p.wordNotIn, 'F a'), 'wordNotIn should not satisfy F a');
   });
