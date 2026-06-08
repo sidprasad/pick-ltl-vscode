@@ -161,6 +161,6 @@
     "vsce": "^2.9.0"
   },
   "dependencies": {
-    "@sidprasad/ltl-ts": "file:../ltl-ts"
+    "@sidprasad/ltl-ts": "github:sidprasad/ltl-ts#v0.1.0"
   }
 }
