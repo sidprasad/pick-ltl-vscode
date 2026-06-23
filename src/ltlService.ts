@@ -127,21 +127,6 @@ export async function getAvailableFamilies(vendor?: string): Promise<string[]> {
   return Array.from(families).sort();
 }
 
-/** Lazily load the (ESM) LTL engine for parse validation. */
-async function getLtl() {
-  return await import('@sidprasad/ltl-ts');
-}
-
-async function isParseableFormula(formula: string): Promise<boolean> {
-  try {
-    const { parseFormula } = await getLtl();
-    parseFormula(formula);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function sanitizeExampleTraces(rawTraces: unknown): string[] {
   if (!Array.isArray(rawTraces)) {
     return [];
@@ -360,15 +345,9 @@ export async function generateLtlFromDescription(
       })()
     }));
 
-  // Drop formulas the engine cannot parse (no auto-rewrite — LTL has no safe one).
-  const validated: LtlCandidate[] = [];
-  for (const c of shaped) {
-    if (await isParseableFormula(c.formula)) {
-      validated.push(c);
-    } else {
-      logger.warn(`Dropping unparseable LTL candidate: "${c.formula}"`);
-    }
-  }
+  // Parse-validation is delegated to the Python backend (ANTLR), which rejects
+  // or normalizes formulas when it builds the candidate pool.
+  const validated: LtlCandidate[] = shaped;
 
   // If atoms were declared, optionally flag candidates using undeclared atoms (kept, but logged).
   if (declaredAtoms.size > 0) {

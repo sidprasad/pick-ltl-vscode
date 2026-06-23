@@ -6,14 +6,14 @@
 
 PICK (Pairwise Iterative-Choice Knockout) helps you make smart use of generative AI to author **Linear Temporal Logic (LTL)** formulas. You describe a temporal property in natural language; PICK proposes several candidate formulas and helps you converge on the one you actually mean by classifying concrete example **traces**.
 
-This is the LTL counterpart of PICK-Formula. The formal analysis runs entirely in TypeScript via the [`@sidprasad/ltl-ts`](https://github.com/sidprasad/ltl-ts) engine — **no Python and no SPOT dependency** — so it runs anywhere VS Code does.
+This is the LTL counterpart of PICK-Formula. The formal analysis — **misconception-based candidate mutation** and **SPOT**-backed distinguishing-trace generation — runs in a local Python sidecar that the extension launches and supervises for you.
 
 ---
 
 # How it works
 
-1. Asks a language model to generate a handful of candidate LTL formulas, corresponding to different ways your description might be interpreted (safety vs. liveness, scope of `G`/`F`, strict vs. non-strict, …).
-2. Generates **distinguishing traces** — ultimately-periodic (lasso) words that the candidates disagree on — and renders each as an **SVG diagram** (state boxes, cycle arc, positive/negated literals).
+1. Asks a language model for one or two **seed** LTL formulas capturing how your description might be interpreted, then expands them in the Python backend with **misconception mutations** (8 common LTL misunderstandings — e.g. dropping an eventually/always, swapping `G`/`F`, weak/exclusive until) to build a pool of plausible-but-distinct candidates.
+2. Uses **SPOT** to generate **distinguishing traces** — ultimately-periodic (lasso) words the candidates disagree on — and renders each as an **SVG diagram** (state boxes, cycle arc, positive/negated literals).
 3. Asks you to upvote/downvote whether each trace *should* satisfy your intended property. Each vote is really a decision about the candidate formulas.
 4. Eliminates candidates that disagree with your classifications. You can **revise** your description at any time; PICK retains all your classifications.
 5. Terminates when one formula remains, or when none do (so you can revise). Stop whenever you're satisfied.
@@ -24,7 +24,23 @@ The LTL operators understood are `!`, `X`, `F`, `G`, `&`, `|`, `U`, `->`, `<->` 
 
 # Prerequisites
 
-PICK requires a language model extension enabled in VS Code. We recommend **GitHub Copilot** (GitHub Copilot Free, included with any GitHub account, is sufficient). When you first use PICK, VS Code prompts you to grant the extension access to Language Models — **click "Allow"**.
+PICK needs two things:
+
+1. **A language model extension** enabled in VS Code (for seed generation). We recommend **GitHub Copilot** (GitHub Copilot Free, included with any GitHub account, is sufficient). When you first use PICK, VS Code prompts you to grant the extension access to Language Models — **click "Allow"**.
+
+2. **A Python backend with SPOT** (for misconception mutation + trace generation). `spot` ships on conda-forge (not PyPI), so the backend lives in a conda environment. The simplest path:
+
+   - Run **PICK LTL: Set Up / Restart Backend** from the Command Palette. If a suitable environment isn't found and you have `conda`/`mamba`/`micromamba` installed, PICK offers to create a `pick-ltl` environment (`spot` + deps) for you in one click.
+   - Or create it yourself and let PICK auto-detect it:
+     ```bash
+     conda create -n pick-ltl python=3.12
+     conda activate pick-ltl
+     conda install -c conda-forge spot
+     pip install -r python/requirements.txt
+     ```
+   - To use a specific interpreter, set `pick-ltl.backend.pythonPath` to its absolute path.
+
+   The extension starts the backend automatically on a private localhost port and shuts it down when VS Code closes. Your description still goes to the LLM for seed generation, but **all formal analysis stays on your machine.**
 
 ---
 
@@ -32,16 +48,20 @@ PICK requires a language model extension enabled in VS Code. We recommend **GitH
 
 All settings appear under the `pick-ltl` section in VS Code Settings, including:
 
-- `pick-ltl.eliminationThreshold` (number, default 2) — negative votes required to eliminate a candidate formula.
-- `pick-ltl.maxCandidates` (number, default 4) — how many candidate formulas to consider.
-- `pick-ltl.searchTimeoutMs` (number, default 8000) — budget for engine trace-generation calls.
+- `pick-ltl.backend.pythonPath` (string) — absolute path to a Python interpreter whose environment has `spot`. Empty auto-detects a conda env named `pick-ltl`.
+- `pick-ltl.backend.autoStart` (boolean, default true) — start the backend sidecar on activation.
+- `pick-ltl.backend.port` (number, default 0) — localhost port for the sidecar; 0 picks a free one.
 - `pick-ltl.surveyPromptEnabled` (boolean, default true).
+
+Candidate count and elimination thresholds are determined by the backend (misconception expansion + SPOT), so the older TS-era vote/threshold/candidate knobs have been removed.
 
 ---
 
 # Development
 
-This extension depends on the LTL engine [`@sidprasad/ltl-ts`](https://github.com/sidprasad/ltl-ts) as a **GitHub dependency** (`"@sidprasad/ltl-ts": "github:sidprasad/ltl-ts#v0.1.0"`), so a plain `npm install` pulls it — no sibling checkout required. The engine repo ships its built `dist/`, so no build step runs at install time.
+The extension bundles **no LTL engine**: all formal analysis runs in the Python backend (SPOT). Trace SVGs are produced by a small committed renderer ([`media/vendor/tracerenderer.js`](media/vendor/tracerenderer.js)) fed render data parsed from SPOT's lasso strings by [`src/traceRender.ts`](src/traceRender.ts).
+
+The Python backend is **vendored** under [`python/pick_ltl`](python/pick_ltl) from the standalone [`pick-ltl`](https://github.com/sidprasad/pick-ltl) project so the `.vsix` is self-contained. Re-sync it after upstream changes with `./util/sync-backend.sh` (details in [`python/README.md`](python/README.md)); `python/preflight.py` is extension-owned and is never overwritten by the sync.
 
 > The engine repo is public, so `npm install` clones it with no credentials required.
 
@@ -94,7 +114,7 @@ To also publish to the registries, add repository **secrets** (Settings → Secr
 
 # Privacy and Data
 
-PICK sends your description to the configured LLM provider solely for candidate generation. All formal analysis (trace generation, membership, equivalence) happens locally in the engine. The extension stores no prompts or results. LLM providers may log requests per their own policies — avoid placing sensitive information in prompts if this is a concern.
+PICK sends your description to the configured LLM provider solely for seed generation. All formal analysis (misconception mutation, trace generation, membership, equivalence) happens locally in the Python sidecar over a private localhost port; nothing leaves your machine for that step. The extension stores no prompts or results. LLM providers may log requests per their own policies — avoid placing sensitive information in prompts if this is a concern.
 
 ---
 
