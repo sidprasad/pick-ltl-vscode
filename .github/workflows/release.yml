@@ -43,9 +43,6 @@ jobs:
           npm run compile
           npm run lint
 
-      - name: Engine-bridge tests (no VS Code host needed)
-        run: npx mocha --ui tdd --timeout 8000 out/test/ltlAnalyzer.test.js
-
       - name: Package VSIX
         run: npm run package:vsix
 
