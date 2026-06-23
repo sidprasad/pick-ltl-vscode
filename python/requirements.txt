@@ -1,0 +1,20 @@
+# Python dependencies for the PICK LTL backend sidecar.
+#
+# IMPORTANT: `spot` is NOT on PyPI and cannot be installed with pip. Install it
+# from conda-forge into the same environment:
+#
+#     conda create -n pick-ltl python=3.12
+#     conda activate pick-ltl
+#     conda install -c conda-forge spot
+#     pip install -r python/requirements.txt
+#
+# Then point the extension at this interpreter via the
+# "pick-ltl.backend.pythonPath" setting (or let it auto-detect the conda env
+# named "pick-ltl").
+
+Flask>=3.0.0
+antlr4-python3-runtime>=4.13.0,<4.14
+requests>=2.31.0
+python-dotenv>=1.0.0
+inflect>=7.0.0
+wordfreq>=3.1.0

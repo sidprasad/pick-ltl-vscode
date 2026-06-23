@@ -44,6 +44,10 @@ class Logger {
                 }
         }
 
+        show(): void {
+                this.channel?.show();
+        }
+
         dispose(): void {
                 this.channel?.dispose();
                 this.channel = undefined;

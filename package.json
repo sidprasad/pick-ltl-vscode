@@ -62,6 +62,11 @@
         "command": "pick-ltl.resetSurveyState",
         "title": "Clear Local Storage",
         "category": "PICK LTL Builder"
+      },
+      {
+        "command": "pick-ltl.restartBackend",
+        "title": "Set Up / Restart Backend",
+        "category": "PICK LTL Builder"
       }
     ],
     "keybindings": [
@@ -74,55 +79,6 @@
     "configuration": {
       "title": "PICK LTL Builder",
       "properties": {
-        "pick-ltl.eliminationThreshold": {
-          "type": "number",
-          "default": 2,
-          "minimum": 1,
-          "description": "Number of negative votes required to eliminate a candidate formula"
-        },
-        "pick-ltl.maxClassifications": {
-          "type": "number",
-          "default": 100,
-          "minimum": 20,
-          "description": "Maximum number of trace classifications before forcing termination"
-        },
-        "pick-ltl.minPositiveVotesToSelect": {
-          "type": "number",
-          "default": 1,
-          "minimum": 1,
-          "description": "Minimum number of positive votes required before selecting a final formula"
-        },
-        "pick-ltl.maxPairsWithoutProgress": {
-          "type": "number",
-          "default": 2,
-          "minimum": 2,
-          "description": "Maximum number of consecutive trace pairs without eliminating a candidate before forcing termination"
-        },
-        "pick-ltl.maxSuggestedEdgeCases": {
-          "type": "number",
-          "default": 2,
-          "minimum": 0,
-          "maximum": 6,
-          "description": "Maximum number of LLM-suggested example traces to surface before analyzer-generated pairs"
-        },
-        "pick-ltl.maxCandidates": {
-          "type": "number",
-          "default": 4,
-          "minimum": 2,
-          "maximum": 10,
-          "description": "Maximum number of LTL candidates to consider (highest confidence scores are selected)"
-        },
-        "pick-ltl.useLLMGeneratedWords": {
-          "type": "boolean",
-          "default": true,
-          "description": "Use LLM-suggested example traces to distinguish candidates before using analyzer-generated pairs"
-        },
-        "pick-ltl.searchTimeoutMs": {
-          "type": "number",
-          "default": 8000,
-          "minimum": 1000,
-          "description": "Timeout (ms) for engine trace-generation calls before surfacing a fallback"
-        },
         "pick-ltl.surveyPromptEnabled": {
           "type": "boolean",
           "default": true,
@@ -132,23 +88,38 @@
           "type": "boolean",
           "default": true,
           "description": "Show modal dialog when reporting an issue to remind user to paste clipboard content"
+        },
+        "pick-ltl.backend.pythonPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to a Python interpreter for the PICK LTL backend sidecar. The interpreter's environment must have `spot` installed (`conda install -c conda-forge spot`). Leave empty to auto-detect a conda environment named `pick-ltl`."
+        },
+        "pick-ltl.backend.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the Python backend sidecar automatically when the extension activates."
+        },
+        "pick-ltl.backend.port": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Localhost port for the backend sidecar. 0 selects a free port automatically."
         }
       }
     }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "vendor:copy": "mkdir -p media/vendor && cp node_modules/@sidprasad/ltl-ts/viz/tracerenderer.js media/vendor/tracerenderer.js",
     "clean": "rm -rf out",
-    "compile": "npm run vendor:copy && tsc -p ./",
+    "compile": "npm run clean && tsc -p ./",
     "package:vsix": "npx @vscode/vsce package",
     "publish:vsce": "npx @vscode/vsce publish",
     "publish:ovsx": "npx ovsx publish",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run clean && npm run compile && npm run lint",
     "lint": "eslint src",
-    "test": "vscode-test --timeout 8000",
-    "test:analyzer": "npm run clean && npm run compile && mocha --ui tdd --timeout 8000 out/test/ltlAnalyzer.test.js"
+    "test": "vscode-test --timeout 8000"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
@@ -163,7 +134,5 @@
     "@vscode/vsce": "^3.2.0",
     "ovsx": "^0.10.1"
   },
-  "dependencies": {
-    "@sidprasad/ltl-ts": "github:sidprasad/ltl-ts#v0.1.0"
-  }
+  "dependencies": {}
 }

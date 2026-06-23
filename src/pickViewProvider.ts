@@ -1,97 +1,14 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { PickController, PickState, WordClassification, WordClassificationRecord } from './pickController';
-import { generateLtlFromDescription, PermissionRequiredError, NoModelsAvailableError, ModelNotSupportedError, ModelNotEnabledError, getAvailableChatModels, LtlCandidate } from './ltlService';
+import { WordClassification, WordClassificationRecord } from './pickTypes';
+import { generateLtlFromDescription, PermissionRequiredError, NoModelsAvailableError, ModelNotSupportedError, ModelNotEnabledError, getAvailableChatModels, LtlCandidate, LtlAtom } from './ltlService';
 import { logger } from './logger';
-import { createLtlAnalyzer } from './ltlAnalyzer';
 import { openIssueReport } from './issueReporter';
 import { SurveyPrompt } from './surveyPrompt';
-
-interface FormulaMatchVerifier {
-  verifyMatch(word: string, pattern: string): boolean;
-}
-
-export function selectEdgeCaseSuggestions(
-  candidates: LtlCandidate[],
-  analyzer: FormulaMatchVerifier,
-  maxSuggestions: number
-): string[] {
-  const maxAllowed = Math.min(6, Math.max(0, Math.trunc(maxSuggestions)));
-
-  if (maxAllowed === 0) {
-    logger.info('Skipping LLM-suggested edge cases because user limit is 0.');
-    return [];
-  }
-
-  const allSuggestedWords = candidates
-    .flatMap(candidate => candidate.exampleTraces ?? [])
-    .map(word => word.trim())
-    .filter(word => word.length > 0);
-
-  const uniqueWords = Array.from(new Set(allSuggestedWords));
-
-  const candidateFormulas = Array.from(new Set(candidates.map(candidate => candidate.formula)));
-  const stats = uniqueWords.map((word, index) => {
-    const matches = candidateFormulas.map(formula => analyzer.verifyMatch(word, formula));
-    const matchCount = matches.filter(Boolean).length;
-    const nonMatchCount = matches.length - matchCount;
-    // Create a signature for the match pattern (e.g., "true,false,true" for 3 formulas)
-    const matchSignature = matches.join(',');
-
-    return { word, index, matchCount, nonMatchCount, matchSignature };
-  });
-
-  // Filter out distinguishing words that have the exact same match signature as a previous word
-  // Keep only the first occurrence of each unique match pattern for distinguishing words
-  // But don't filter unmatched or all-matching words
-  const seenDistinguishingSignatures = new Set<string>();
-  const uniqueMatchStats = stats.filter(entry => {
-    // Don't filter unmatched words or words that match all formulas
-    if (entry.matchCount === 0 || entry.nonMatchCount === 0) {
-      return true;
-    }
-    
-    // For distinguishing words, filter duplicates
-    if (seenDistinguishingSignatures.has(entry.matchSignature)) {
-      return false;
-    }
-    seenDistinguishingSignatures.add(entry.matchSignature);
-    return true;
-  });
-
-  const distinguishing = uniqueMatchStats
-    .filter(entry => entry.matchCount > 0 && entry.nonMatchCount > 0)
-    .map(entry => ({
-      word: entry.word,
-      score: Math.min(entry.matchCount, entry.nonMatchCount),
-      index: entry.index
-    }))
-    .sort((a, b) => b.score - a.score || a.index - b.index);
-
-  const unmatched = uniqueMatchStats.filter(entry => entry.matchCount === 0).sort((a, b) => a.index - b.index);
-
-  const selected: string[] = distinguishing.slice(0, maxAllowed).map(entry => entry.word);
-
-  const remainingSlots = Math.max(0, maxAllowed - selected.length);
-  const unmatchedToInclude = Math.min(2, remainingSlots);
-  selected.push(...unmatched.slice(0, unmatchedToInclude).map(entry => entry.word));
-
-  if (selected.length % 2 === 1) {
-    selected.pop();
-  }
-
-  if (selected.length > 0) {
-    const unmatchedCount = unmatched.slice(0, unmatchedToInclude).length;
-    const distinguishingCount = selected.length - unmatchedCount;
-    logger.info(
-      `Collected ${selected.length} LLM-suggested edge case word(s) to classify first ` +
-      `(distinguishing: ${distinguishingCount}, unmatched: ${unmatchedCount}).`
-    );
-  }
-
-  return selected;
-}
+import { LtlBackend, BackendUnavailableError, SessionState } from './ltlBackend';
+import { PythonSidecar, SidecarError } from './sidecar';
+import { traceToRenderData } from './traceRender';
 
 /**
  * Select the top N candidates by confidence score.
@@ -127,20 +44,193 @@ export function selectTopCandidatesByConfidence(
 export class PickViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'pick-ltl.pickView';
   private view?: vscode.WebviewView;
-  private controller: PickController;
-  private analyzer = createLtlAnalyzer();
   private renderCache = new Map<string, unknown>();
   private cancellationTokenSource?: vscode.CancellationTokenSource;
   private activeHeartbeat?: { stop: () => void };
   private lastModelDescription?: string;
   private lastModelId?: string;
+  // Backend-driven session state (replaces the in-TS PickController loop).
+  private session: SessionState | null = null;
+  private currentPairTraces: [string, string] | null = null;
+  private currentPairClassified = new Set<string>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly surveyPrompt: SurveyPrompt,
-    private readonly globalState: vscode.Memento
-  ) {
-    this.controller = new PickController();
+    private readonly globalState: vscode.Memento,
+    private readonly backend: LtlBackend,
+    private readonly sidecar: PythonSidecar
+  ) {}
+
+  /**
+   * Called when the backend sidecar becomes reachable (on auto-start or after
+   * the "Set Up / Restart Backend" command). The full webview rewire onto the
+   * backend API will refresh state here; for now it records readiness and
+   * clears any "backend unavailable" notice in the webview.
+   */
+  async onBackendReady(): Promise<void> {
+    logger.info('PICK LTL backend is ready.');
+    this.view?.webview.postMessage({ type: 'backendReady', baseUrl: this.sidecar.getBaseUrl() });
+  }
+
+  // ---- Backend-driven PICK loop (sidecar adapter) ----------------------------
+
+  /** Map a backend SessionState's candidates into the webview's candidate shape. */
+  private sessionToCandidates(session: SessionState) {
+    return session.candidate_states.map(c => ({
+      pattern: c.formula,
+      explanation: c.explanation || undefined,
+      confidence: c.confidence ?? undefined,
+      positiveVotes: c.positive_votes,
+      negativeVotes: c.negative_votes,
+      eliminated: c.eliminated,
+      eliminationThreshold: c.elimination_threshold,
+      equivalents: c.equivalents ?? []
+    }));
+  }
+
+  /** Build the webview "status" object from a backend SessionState. */
+  private sessionToStatus(session: SessionState) {
+    const candidateDetails = this.sessionToCandidates(session);
+    const wordHistory = session.history.map(h => ({
+      word: h.trace,
+      classification: h.classification,
+      matchingFormulas: h.matching_candidates
+    }));
+    const thresholds = session.candidate_states.map(c => c.elimination_threshold);
+    return {
+      candidateDetails,
+      threshold: thresholds.length ? Math.min(...thresholds) : 2,
+      wordHistory,
+      activeCandidates: candidateDetails.filter(c => !c.eliminated).length,
+      totalCandidates: candidateDetails.length
+    };
+  }
+
+  /** Backend history -> the WordClassificationRecord shape used by refinement helpers. */
+  private historyToRecords(session: SessionState): WordClassificationRecord[] {
+    return session.history.map(h => ({
+      word: h.trace,
+      classification: h.classification as WordClassification,
+      timestamp: h.timestamp,
+      matchingFormulas: h.matching_candidates,
+      source: (h.source === 'direct' || h.source === 'manual' ? 'direct' : 'pair') as 'pair' | 'direct'
+    }));
+  }
+
+  private toSeedAtoms(atoms: LtlAtom[]): Array<{ name: string; meaning: string }> {
+    return atoms.map(a => ({ name: a.name, meaning: a.meaning ?? '' }));
+  }
+
+  /** Surface a sidecar/backend failure as a webview error with setup guidance. */
+  private async reportBackendError(error: unknown): Promise<void> {
+    let message: string;
+    if (error instanceof SidecarError) {
+      message = `${error.message}${error.details ? `\n\n${error.details}` : ''}\n\nRun "PICK LTL: Set Up / Restart Backend" after fixing your environment.`;
+    } else if (error instanceof BackendUnavailableError) {
+      message = `${error.message}\n\nRun "PICK LTL: Set Up / Restart Backend" to start it.`;
+    } else {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    logger.error(error instanceof Error ? error : new Error(String(error)), 'PICK LTL backend error');
+    this.sendMessage({ type: 'error', message });
+  }
+
+  /** Render the current session to the webview according to its mode. */
+  private async renderSession(): Promise<void> {
+    const session = this.session;
+    if (!session) {
+      return;
+    }
+    const status = this.sessionToStatus(session);
+    const accepts = () => status.wordHistory.filter(r => r.classification === 'accept').map(r => r.word);
+    const rejects = () => status.wordHistory.filter(r => r.classification === 'reject').map(r => r.word);
+
+    if (session.mode === 'final_result' || session.mode === 'single_candidate') {
+      const fr = session.final_result;
+      const historyRenderData = await this.buildHistoryRenderData(status.wordHistory.map(r => r.word));
+      if (fr && fr.formula) {
+        this.sendMessage({
+          type: 'finalResult',
+          formula: fr.formula,
+          wordsIn: fr.examples_in ?? [],
+          wordsOut: fr.examples_out ?? [],
+          status,
+          historyRenderData
+        });
+      } else {
+        this.sendMessage({
+          type: 'noFormulaFound',
+          message: (fr && fr.message) || session.message || 'No candidate formulas match your requirements.',
+          candidateDetails: status.candidateDetails,
+          wordsIn: accepts(),
+          wordsOut: rejects(),
+          wordHistory: status.wordHistory,
+          historyRenderData
+        });
+      }
+      await this.surveyPrompt.incrementUsageAndCheckPrompt();
+      return;
+    }
+
+    if (session.mode === 'no_result') {
+      const historyRenderData = await this.buildHistoryRenderData(status.wordHistory.map(r => r.word));
+      this.sendMessage({
+        type: 'noFormulaFound',
+        message: session.message || 'All candidate formulas were eliminated.',
+        candidateDetails: status.candidateDetails,
+        wordsIn: accepts(),
+        wordsOut: rejects(),
+        wordHistory: status.wordHistory,
+        historyRenderData
+      });
+      await this.surveyPrompt.incrementUsageAndCheckPrompt();
+      return;
+    }
+
+    // voting
+    if (session.current_pair) {
+      const pair = { word1: session.current_pair.trace1, word2: session.current_pair.trace2 };
+      this.currentPairTraces = [pair.word1, pair.word2];
+      this.currentPairClassified.clear();
+      const renderData = {
+        word1: traceToRenderData(pair.word1),
+        word2: traceToRenderData(pair.word2)
+      };
+      const historyRenderData = await this.buildHistoryRenderData(status.wordHistory.map(r => r.word));
+      this.sendMessage({
+        type: 'newPair',
+        pair,
+        status,
+        matches: { word1: session.current_pair.matches1, word2: session.current_pair.matches2 },
+        renderData,
+        historyRenderData
+      });
+      return;
+    }
+
+    if (session.exhausted) {
+      this.sendMessage({
+        type: 'insufficientWords',
+        candidates: status.candidateDetails.filter(c => !c.eliminated),
+        status,
+        message: session.message || 'Unable to generate more distinguishing traces.'
+      });
+      return;
+    }
+
+    // Voting but no pair yet (e.g. right after build): the caller advances.
+    logger.info('renderSession: voting with no current pair; awaiting advance().');
+  }
+
+  /** Ask the backend for the next distinguishing pair, then render. */
+  private async advance(): Promise<void> {
+    if (!this.session) {
+      this.sendMessage({ type: 'error', message: 'No active session. Generate candidates first.' });
+      return;
+    }
+    this.session = await this.backend.nextPair(this.session);
+    await this.renderSession();
   }
 
   private readonly preferredModelKey = 'pick.preferredModelId';
@@ -311,13 +401,6 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private collectEdgeCaseSuggestions(candidates: LtlCandidate[]): string[] {
-    const config = vscode.workspace.getConfiguration('pick-ltl');
-    const maxSuggestions = config.get<number>('maxSuggestedEdgeCases', 2);
-
-    return selectEdgeCaseSuggestions(candidates, this.analyzer, maxSuggestions);
-  }
-
   private collectPositiveExamplesForRefinement(wordHistory: WordClassificationRecord[]): string[] {
     const MAX_EXAMPLES = 6;
     const MAX_TOTAL_CHARS = 240;
@@ -404,11 +487,12 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       let candidates: LtlCandidate[] = [];
       let warnings: string[] = [];
+      let atoms: LtlAtom[] = [];
       try {
-        await this.analyzer.init();
         const result = await generateLtlFromDescription(prompt, this.cancellationTokenSource.token, modelId);
         candidates = result.candidates;
         warnings = result.warnings ?? [];
+        atoms = result.atoms ?? [];
         logger.info(`Generated ${candidates.length} candidates from LLM`);
 
         // Log each candidate with explanation
@@ -511,149 +595,26 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      this.sendMessage({ type: 'status', message: 'Validating model output (syntax checks)...' });
+      this.sendMessage({ type: 'status', message: 'Expanding candidates with misconception mutations…' });
 
-      // Check cancellation before filtering
-      if (this.cancellationTokenSource?.token.isCancellationRequested) {
-        logger.info('Operation cancelled before filtering duplicates');
-        this.sendMessage({ 
-          type: 'cancelled', 
-          message: 'Operation cancelled by user.' 
-        });
-        return;
-      }
-
-      // Filter out invalid formulas and formulas with unsupported syntax
-      const validCandidates: LtlCandidate[] = [];
-      for (const candidate of candidates) {
-        const formula = candidate.formula;
-        const isValid = this.analyzer.isValidFormula(formula);
-        if (!isValid) {
-          logger.warn(`Filtered out invalid formula: "${formula}"`);
-          continue;
-        }
-
-        const hasSupported = await this.analyzer.hasSupportedSyntax(formula);
-        if (!hasSupported) {
-          logger.warn(`Filtered out formula with unsupported syntax: "${formula}"`);
-          continue;
-        }
-
-        validCandidates.push(candidate);
-      }
-
-      if (validCandidates.length === 0) {
-        this.sendMessage({ 
-          type: 'error', 
-          message: 'All generated candidates were invalid LTL (could not be parsed). Please try again.' 
-        });
-        return;
-      }
-
-      if (validCandidates.length < candidates.length) {
-        logger.info(`Filtered out ${candidates.length - validCandidates.length} invalid or unsupported formula(es)`);
-      }
-
-      // Filter out equivalent/duplicate formulas
-      this.sendMessage({ type: 'status', message: 'Filtering duplicate formulas...' });
-      let uniqueCandidates: string[] = [];
-      let equivalenceMap: Map<string, string[]> = new Map();
       try {
-        const deduped = await this.filterEquivalentFormulas(validCandidates.map(c => c.formula));
-        uniqueCandidates = deduped.uniqueFormulas;
-        equivalenceMap = deduped.equivalenceMap;
-      } catch (error) {
-        const errMsg = String(error);
-        if (this.cancellationTokenSource?.token.isCancellationRequested || errMsg.includes('cancelled')) {
-          logger.info('Duplicate filtering cancelled by user.');
-          this.sendMessage({
-            type: 'cancelled', 
-            message: 'Operation cancelled by user.' 
-          });
-          return;
-        }
-        throw error;
-      }
-      
-      // Check cancellation after filtering
-      if (this.cancellationTokenSource?.token.isCancellationRequested) {
-        logger.info('Operation cancelled after filtering duplicates');
-        this.sendMessage({ 
-          type: 'cancelled', 
-          message: 'Operation cancelled by user.' 
-        });
+        await this.sidecar.ensureStarted();
+      } catch (startError) {
+        await this.reportBackendError(startError);
         return;
       }
 
-      // Inform user if duplicates were removed
-      if (uniqueCandidates.length < candidates.length) {
-        this.sendMessage({
-          type: 'status',
-          message: `Removed ${candidates.length - uniqueCandidates.length} duplicate formula(s). Proceeding with ${uniqueCandidates.length} unique candidate(s).`
-        });
-      }
+      // Hand the top LLM interpretations to the backend as PICK seeds; it expands
+      // each via misconception + syntactic mutation and uses SPOT to generate
+      // distinguishing traces and set per-candidate elimination thresholds.
+      const seeds = selectTopCandidatesByConfidence(candidates, 2).map(candidate => ({
+        formula: candidate.formula,
+        explanation: candidate.explanation ?? '',
+        atoms: this.toSeedAtoms(atoms),
+        warnings: []
+      }));
 
-      if (uniqueCandidates.length === 0) {
-        this.sendMessage({ 
-          type: 'error', 
-          message: 'All generated formulas were duplicates. Please try again with a different prompt.' 
-        });
-        return;
-      }
-
-      // Build metadata map for unique candidates (use highest confidence for duplicates)
-      const candidateMeta = new Map<string, LtlCandidate>();
-      validCandidates.forEach(candidate => {
-        const existing = candidateMeta.get(candidate.formula);
-        if (!existing || (candidate.confidence ?? 0) > (existing.confidence ?? 0)) {
-          candidateMeta.set(candidate.formula, candidate);
-        }
-      });
-
-      // Select top N candidates by confidence
-      const config = vscode.workspace.getConfiguration('pick-ltl');
-      const maxCandidates = config.get<number>('maxCandidates', 4);
-      const uniqueWithMeta = uniqueCandidates.map(formula => candidateMeta.get(formula)!);
-      const topCandidates = selectTopCandidatesByConfidence(uniqueWithMeta, maxCandidates);
-      const finalCandidateFormulas = topCandidates.map(c => c.formula);
-
-      // Check cancellation before initializing candidates
-      if (this.cancellationTokenSource?.token.isCancellationRequested) {
-        logger.info('Operation cancelled before initializing candidates');
-        this.sendMessage({ 
-          type: 'cancelled', 
-          message: 'Operation cancelled by user.' 
-        });
-        return;
-      }
-
-      // Initialize controller with unique candidates
-      this.sendMessage({ type: 'status', message: 'Determining elimination thresholds...' });
-
-      const suggestedWords = this.collectEdgeCaseSuggestions(topCandidates);
-
-      const seeds = finalCandidateFormulas.map(formula => {
-        const meta = candidateMeta.get(formula);
-        return {
-          pattern: formula,
-          explanation: meta?.explanation,
-          confidence: meta?.confidence
-        };
-      });
-
-      // Filter equivalence map to only include selected candidates
-      const filteredEquivalenceMap = new Map<string, string[]>();
-      for (const formula of finalCandidateFormulas) {
-        const equivalents = equivalenceMap.get(formula);
-        if (equivalents) {
-          filteredEquivalenceMap.set(formula, equivalents);
-        }
-      }
-
-      await this.controller.generateCandidates(prompt, seeds, filteredEquivalenceMap, (current, total) => {
-        const percent = Math.round((current / total) * 100);
-        this.sendMessage({ type: 'status', message: `Determining elimination thresholds... ${percent}%` });
-      }, suggestedWords);
+      this.session = await this.backend.buildCandidates({ prompt, seeds });
       
       // Check cancellation before sending results
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
@@ -667,7 +628,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       this.sendMessage({
         type: 'candidatesGenerated',
-        candidates: this.controller.getStatus().candidateDetails
+        candidates: this.sessionToCandidates(this.session!)
       });
 
       this.surfaceModelWarnings(warnings);
@@ -695,221 +656,79 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async handleRequestNextPair() {
-    logger.info('handleRequestNextPair called');
     try {
-      // Check cancellation at the start
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
-        logger.info('Operation cancelled in handleRequestNextPair');
-        this.sendMessage({ 
-          type: 'cancelled', 
-          message: 'Operation cancelled by user.' 
-        });
+        this.sendMessage({ type: 'cancelled', message: 'Operation cancelled by user.' });
         return;
       }
-
-      const activeCount = this.controller.getActiveCandidateCount();
-      logger.info(`Active candidates: ${activeCount}`);
-      
-      if (activeCount === 0) {
-        // No candidates left - check if we're in a refinement scenario
-        const wordHistory = this.controller.getWordHistory();
-        const hasClassifications = wordHistory.length > 0;
-        
-        logger.warn('No active candidates remaining, cannot generate next pair');
-        
-        if (hasClassifications) {
-          // This happened after re-applying classifications during refinement
-          this.sendMessage({ 
-            type: 'noFormulaFound',
-            message: `All ${this.controller.getStatus().totalCandidates} candidate formulas were eliminated after re-applying your ${wordHistory.length} previous classification${wordHistory.length === 1 ? '' : 's'}. Try revising your prompt or starting fresh.`,
-            candidateDetails: this.controller.getStatus().candidateDetails,
-            wordsIn: wordHistory.filter(r => r.classification === 'accept').map(r => r.word),
-            wordsOut: wordHistory.filter(r => r.classification === 'reject').map(r => r.word),
-            wordHistory,
-            historyRenderData: await this.buildHistoryRenderData(wordHistory.map(r => r.word))
-          });
-        } else {
-          // This is an unexpected error with no classifications
-          this.sendMessage({ 
-            type: 'error', 
-            message: 'No active candidates remaining. Please try generating candidates again.' 
-          });
-        }
+      if (!this.session) {
+        this.sendMessage({ type: 'error', message: 'No active session. Generate candidates first.' });
         return;
       }
-
-      logger.info('Calling controller.generateNextPair()');
-      const pair = await this.controller.generateNextPair();
-      const status = this.controller.getStatus();
-      
-      logger.info(`Generated pair: word1="${pair.word1}" (length: ${pair.word1.length}), word2="${pair.word2}" (length: ${pair.word2.length})`);
-      
-      // Check cancellation before sending pair to UI
-      if (this.cancellationTokenSource?.token.isCancellationRequested) {
-        logger.info('Operation cancelled after generating pair, before sending to UI');
-        this.sendMessage({ 
-          type: 'cancelled', 
-          message: 'Operation cancelled by user.' 
-        });
-        return;
-      }
-
-      logger.info('Sending newPair message to webview');
-      const renderData = {
-        word1: await this.analyzer.renderData(pair.word1),
-        word2: await this.analyzer.renderData(pair.word2)
-      };
-      const historyRenderData = await this.buildHistoryRenderData(status.wordHistory.map(r => r.word));
-      this.sendMessage({
-        type: 'newPair',
-        pair,
-        status,
-        matches: this.getPairMatches(pair, status),
-        renderData,
-        historyRenderData
-      });
-      logger.info('handleRequestNextPair completed successfully');
+      await this.advance();
     } catch (error) {
-      logger.error(error, 'Error generating next pair');
-      
-      // Check if the error is about running out of words
-      const errorMessage = String(error);
-      if (errorMessage.includes('Could not generate unique word') || 
-          errorMessage.includes('Failed to generate') ||
-          errorMessage.includes('Exhausted word space')) {
-        // We ran out of words - show best candidates so far
-        const status = this.controller.getStatus();
-        const activeCandidates = status.candidateDetails.filter(c => !c.eliminated);
-        
-        // Send a single consolidated message about word exhaustion
-        logger.warn(`Insufficient words to continue, ${activeCandidates.length} candidates remain`);
-        this.sendMessage({
-          type: 'insufficientWords',
-          candidates: activeCandidates,
-          status,
-          message: `Unable to generate more distinguishing words. ${activeCandidates.length} candidate(s) remain.`
-        });
-      } else {
-        // For other errors, send a clean error message
-        const cleanErrorMessage = error instanceof Error ? error.message : String(error);
-        logger.error(`Failed to generate pair: ${cleanErrorMessage}`);
-        this.sendMessage({ 
-          type: 'error', 
-          message: `Error generating pair: ${cleanErrorMessage}` 
-        });
+      if (error instanceof BackendUnavailableError || error instanceof SidecarError) {
+        await this.reportBackendError(error);
+        return;
       }
+      logger.error(error, 'Error generating next pair');
+      this.sendMessage({ type: 'error', message: `Error generating pair: ${error instanceof Error ? error.message : String(error)}` });
     }
-  }
-
-  /**
-   * Compute which active candidate formulas match each word in the current pair.
-   */
-  private getPairMatches(pair: { word1: string; word2: string }, status: ReturnType<PickController['getStatus']>) {
-    const activeCandidates = status.candidateDetails.filter(c => !c.eliminated);
-    const matchesForWord = (word: string) => 
-      activeCandidates
-        .filter(c => this.analyzer.verifyMatch(word, c.pattern))
-        .map(c => c.pattern);
-
-    return {
-      word1: matchesForWord(pair.word1),
-      word2: matchesForWord(pair.word2)
-    };
   }
 
   private async handleClassifyWord(word: string, classification: string) {
     try {
-      logger.info(`handleClassifyWord called: word="${word}" (length: ${word.length}), classification="${classification}"`);
-      
-      const classificationEnum = classification as WordClassification;
-      this.controller.classifyWord(word, classificationEnum);
-      
-      const state = this.controller.getState();
-      const status = this.controller.getStatus();
-      
-      logger.info(`After classifyWord: state=${state}, activeCandidates=${status.activeCandidates}`);
-      
-      if (state === PickState.FINAL_RESULT) {
-        logger.info('State transitioned to FINAL_RESULT, calling handleFinalResult');
-        await this.handleFinalResult();
-      } else {
-        // Check if both words are classified
-        const bothClassified = this.controller.areBothWordsClassified();
-        logger.info(`Checking areBothWordsClassified: ${bothClassified}`);
-        
-        if (bothClassified) {
-          this.controller.clearCurrentPair();
-          logger.info('Both words classified, clearing current pair and generating next pair');
-          
-          // Send updated status
-          this.sendMessage({
-            type: 'wordClassified',
-            status,
-            bothClassified: true
-          });
-          
-          // Generate next pair
-          this.handleRequestNextPair();
-        } else {
-          logger.info('Only one word classified so far, waiting for second word');
-          // Send updated status but don't generate next pair yet
-          this.sendMessage({
-            type: 'wordClassified',
-            status,
-            bothClassified: false
-          });
-        }
+      if (!this.session) {
+        this.sendMessage({ type: 'error', message: 'No active session to classify against.' });
+        return;
+      }
+      const cls = classification as 'accept' | 'reject' | 'unsure';
+      this.session = await this.backend.classify(this.session, word, cls, 'pair');
+      this.currentPairClassified.add(word);
+
+      // Classification may have converged the session (final / no-result / single).
+      if (this.session.mode !== 'voting') {
+        await this.renderSession();
+        return;
+      }
+
+      const bothClassified = !!this.currentPairTraces
+        && this.currentPairTraces.every(trace => this.currentPairClassified.has(trace));
+      this.sendMessage({ type: 'wordClassified', status: this.sessionToStatus(this.session), bothClassified });
+
+      if (bothClassified) {
+        await this.advance();
       }
     } catch (error) {
+      if (error instanceof BackendUnavailableError || error instanceof SidecarError) {
+        await this.reportBackendError(error);
+        return;
+      }
       logger.error(error, 'Error classifying word');
-      this.sendMessage({
-        type: 'error',
-        message: `Error classifying word: ${error}`
-      });
+      this.sendMessage({ type: 'error', message: `Error classifying word: ${error instanceof Error ? error.message : String(error)}` });
     }
   }
 
   private async handleUpdateClassification(index: number, classification: string) {
     try {
-      const classificationEnum = classification as WordClassification;
-      this.controller.updateClassification(index, classificationEnum);
-
-      const state = this.controller.getState();
-      const status = this.controller.getStatus();
-
-      if (state === PickState.FINAL_RESULT) {
-        await this.handleFinalResult();
+      if (!this.session) {
         return;
       }
-
-      this.sendMessage({
-        type: 'classificationUpdated',
-        status
-      });
-
-      // If we transitioned back to VOTING, generate a new pair
-      if (state === PickState.VOTING && status.activeCandidates > 0) {
-        const currentPair = this.controller.getCurrentPair();
-        if (!currentPair) {
-          // No current pair - we just transitioned back to voting, generate a new pair
-          logger.info('No current pair after state transition, generating new pair');
-          this.handleRequestNextPair();
-        } else {
-          // There's a current pair - only generate next if both words are classified
-          const bothClassified = this.controller.areBothWordsClassified();
-          if (bothClassified) {
-            this.handleRequestNextPair();
-          } else {
-            logger.info('Only one word classified after update, waiting for second word');
-          }
-        }
+      this.session = await this.backend.reclassify(this.session, index, classification);
+      if (this.session.mode !== 'voting') {
+        await this.renderSession();
+        return;
       }
+      this.sendMessage({ type: 'classificationUpdated', status: this.sessionToStatus(this.session) });
+      // reclassify clears the current pair; fetch a fresh one to keep voting.
+      await this.advance();
     } catch (error) {
+      if (error instanceof BackendUnavailableError || error instanceof SidecarError) {
+        await this.reportBackendError(error);
+        return;
+      }
       logger.error(error, 'Error updating classification');
-      this.sendMessage({
-        type: 'error',
-        message: `Error updating classification: ${error}`
-      });
+      this.sendMessage({ type: 'error', message: `Error updating classification: ${error instanceof Error ? error.message : String(error)}` });
     }
   }
 
@@ -918,59 +737,55 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
    */
   private async handleSubmitExamples(acceptWords: string[] = [], rejectWords: string[] = []) {
     try {
+      if (!this.session) {
+        this.sendMessage({ type: 'examplesRejected', message: 'Generate candidates before adding your own examples.' });
+        return;
+      }
       const normalizedAccept = this.normalizeExampleWords(acceptWords);
       const normalizedReject = this.normalizeExampleWords(rejectWords);
 
       const conflicts = normalizedAccept.filter(word => normalizedReject.includes(word));
       if (conflicts.length > 0) {
-        this.sendMessage({
-          type: 'examplesRejected',
-          message: `The same word appears in both lists: ${conflicts.join(', ')}. Remove duplicates and try again.`
-        });
+        this.sendMessage({ type: 'examplesRejected', message: `The same word appears in both lists: ${conflicts.join(', ')}. Remove duplicates and try again.` });
         return;
       }
 
       const combined = [
-        ...normalizedAccept.map(word => ({ word, classification: WordClassification.ACCEPT })),
-        ...normalizedReject.map(word => ({ word, classification: WordClassification.REJECT }))
+        ...normalizedAccept.map(word => ({ word, classification: 'accept' as const })),
+        ...normalizedReject.map(word => ({ word, classification: 'reject' as const }))
       ];
-
       if (combined.length === 0) {
-        this.sendMessage({
-          type: 'examplesRejected',
-          message: 'Add at least one example that should match or should not match.'
-        });
+        this.sendMessage({ type: 'examplesRejected', message: 'Add at least one example that should match or should not match.' });
         return;
       }
 
       const maxExamples = 12;
       const limited = combined.slice(0, maxExamples);
       const truncated = combined.length - limited.length;
+      const acceptList = limited.filter(entry => entry.classification === 'accept').map(entry => entry.word);
+      const rejectList = limited.filter(entry => entry.classification === 'reject').map(entry => entry.word);
 
-      const applied = this.controller.classifyDirectWords(limited);
-      logger.info(`Applied ${applied} direct classification(s) from user-provided examples.`);
-
-      const state = this.controller.getState();
-      const status = this.controller.getStatus();
+      this.session = await this.backend.addExamples(this.session, acceptList, rejectList);
+      logger.info(`Applied ${limited.length} direct classification(s) from user-provided examples.`);
 
       this.sendMessage({
         type: 'examplesApplied',
-        status,
-        acceptCount: limited.filter(entry => entry.classification === WordClassification.ACCEPT).length,
-        rejectCount: limited.filter(entry => entry.classification === WordClassification.REJECT).length,
+        status: this.sessionToStatus(this.session),
+        acceptCount: acceptList.length,
+        rejectCount: rejectList.length,
         truncated
       });
 
-      if (state === PickState.FINAL_RESULT) {
-        await this.handleFinalResult();
+      if (this.session.mode !== 'voting') {
+        await this.renderSession();
       }
     } catch (error) {
+      if (error instanceof BackendUnavailableError || error instanceof SidecarError) {
+        await this.reportBackendError(error);
+        return;
+      }
       logger.error(error, 'Error applying custom examples');
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.sendMessage({
-        type: 'error',
-        message: `Error applying your examples: ${errorMessage}`
-      });
+      this.sendMessage({ type: 'error', message: `Error applying your examples: ${error instanceof Error ? error.message : String(error)}` });
     }
   }
 
@@ -1006,144 +821,122 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
   private async handleLoadSession(data: any) {
     try {
       logger.info('Loading session from exported JSON');
-      
-      // Validate the data structure
       if (!data || typeof data !== 'object') {
-        this.sendMessage({
-          type: 'error',
-          message: 'Invalid session data: not an object'
-        });
+        this.sendMessage({ type: 'error', message: 'Invalid session data: not an object' });
         return;
       }
-
       if (!Array.isArray(data.candidates) || data.candidates.length === 0) {
-        this.sendMessage({
-          type: 'error',
-          message: 'Invalid session data: candidates must be a non-empty array'
-        });
+        this.sendMessage({ type: 'error', message: 'Invalid session data: candidates must be a non-empty array' });
         return;
       }
-
       if (!Array.isArray(data.classifications)) {
-        this.sendMessage({
-          type: 'error',
-          message: 'Invalid session data: classifications must be an array'
-        });
+        this.sendMessage({ type: 'error', message: 'Invalid session data: classifications must be an array' });
         return;
       }
 
-      // Extract prompt and modelId if present
       const loadedPrompt = typeof data.prompt === 'string' ? data.prompt : '';
       const loadedModelId = typeof data.modelId === 'string' ? data.modelId : '';
 
-      // Extract candidates
-      const candidatePatterns: Array<{ pattern: string; explanation?: string; confidence?: number }> = [];
-      const equivalenceMap = new Map<string, string[]>();
-
+      const candidateStates: SessionState['candidate_states'] = [];
       for (const candidate of data.candidates) {
-        if (!candidate.formula || typeof candidate.formula !== 'string') {
+        if (!candidate || typeof candidate.formula !== 'string' || candidate.formula.trim().length === 0) {
           logger.warn('Skipping candidate with missing or invalid formula');
           continue;
         }
-
-        candidatePatterns.push({
-          pattern: candidate.formula,
-          explanation: candidate.explanation || undefined,
-          confidence: typeof candidate.confidence === 'number' ? candidate.confidence : undefined
+        candidateStates.push({
+          formula: candidate.formula,
+          explanation: typeof candidate.explanation === 'string' ? candidate.explanation : '',
+          origin: { kind: 'seed', misconception_code: null },
+          confidence: typeof candidate.confidence === 'number' ? candidate.confidence : null,
+          equivalents: Array.isArray(candidate.equivalents) ? candidate.equivalents.map((x: unknown) => String(x)) : [],
+          positive_votes: 0,
+          negative_votes: 0,
+          elimination_threshold: 2,
+          eliminated: false
         });
-
-        // Store equivalents if present
-        if (Array.isArray(candidate.equivalents) && candidate.equivalents.length > 0) {
-          equivalenceMap.set(candidate.formula, candidate.equivalents);
-        }
       }
-
-      if (candidatePatterns.length === 0) {
-        this.sendMessage({
-          type: 'error',
-          message: 'No valid candidate formulas found in session data'
-        });
+      if (candidateStates.length === 0) {
+        this.sendMessage({ type: 'error', message: 'No valid candidate formulas found in session data' });
         return;
       }
 
-      // Convert classification format from export ('in'/'out'/'unsure') to internal format
-      const normalizeClassification = (classification: string): WordClassification => {
-        const normalized = (classification || '').toLowerCase();
-        if (normalized === 'in') { return WordClassification.ACCEPT; }
-        if (normalized === 'out') { return WordClassification.REJECT; }
-        return WordClassification.UNSURE;
+      const toCls = (raw: string): 'accept' | 'reject' | 'unsure' => {
+        const n = (raw || '').toLowerCase();
+        if (n === 'in' || n === 'accept') {
+          return 'accept';
+        }
+        if (n === 'out' || n === 'reject') {
+          return 'reject';
+        }
+        return 'unsure';
       };
-
-      const classifications: Array<{ word: string; classification: WordClassification }> = [];
-      
+      const accepts: string[] = [];
+      const rejects: string[] = [];
       for (const item of data.classifications) {
-        if (!item.word || typeof item.word !== 'string') {
-          logger.warn('Skipping classification with missing or invalid word');
+        if (!item || typeof item.word !== 'string') {
           continue;
         }
-
-        classifications.push({
-          word: item.word,
-          classification: normalizeClassification(item.classification)
-        });
+        const cls = toCls(item.classification);
+        if (cls === 'accept') {
+          accepts.push(item.word);
+        } else if (cls === 'reject') {
+          rejects.push(item.word);
+        }
       }
 
-      // Reset controller and generate candidates
-      this.controller.reset(false);
-      this.sendMessage({ type: 'status', message: 'Loading session...' });
-
-      // Ensure the provider's analyzer is loaded before the synchronous
-      // verifyMatch calls reached via handleRequestNextPair/getPairMatches.
-      await this.analyzer.init();
-
-      // Use the loaded prompt if available, otherwise use a default
-      const promptToUse = loadedPrompt || 'Loaded session';
-
-      await this.controller.generateCandidates(
-        promptToUse,
-        candidatePatterns,
-        equivalenceMap
-      );
-
-      logger.info(`Generated ${candidatePatterns.length} candidates from loaded session`);
-
-      // Apply all classifications (this also marks words as used via applyClassification)
-      if (classifications.length > 0) {
-        this.sendMessage({ type: 'status', message: `Applying ${classifications.length} classification(s)...` });
-        const applied = this.controller.classifyDirectWords(classifications);
-        logger.info(`Applied ${applied} classification(s) from loaded session`);
+      this.sendMessage({ type: 'status', message: 'Loading session…' });
+      try {
+        await this.sidecar.ensureStarted();
+      } catch (startError) {
+        await this.reportBackendError(startError);
+        return;
       }
 
-      const state = this.controller.getState();
-      const status = this.controller.getStatus();
+      const importedSession: SessionState = {
+        version: 1,
+        prompt: loadedPrompt || 'Loaded session',
+        provider: {},
+        seed: null,
+        seeds: [],
+        candidate_states: candidateStates,
+        history: [],
+        mode: 'voting',
+        warnings: [],
+        current_pair: null,
+        final_result: null,
+        exhausted: false,
+        message: ''
+      };
+      this.session = await this.backend.importSession(importedSession);
+
+      const classificationCount = accepts.length + rejects.length;
+      if (classificationCount > 0) {
+        this.sendMessage({ type: 'status', message: `Applying ${classificationCount} classification(s)…` });
+        this.session = await this.backend.addExamples(this.session, accepts, rejects);
+      }
 
       this.sendMessage({
         type: 'sessionLoaded',
-        status,
-        candidateCount: candidatePatterns.length,
-        classificationCount: classifications.length,
+        status: this.sessionToStatus(this.session),
+        candidateCount: candidateStates.length,
+        classificationCount,
         prompt: loadedPrompt || undefined,
         modelId: loadedModelId || undefined
       });
 
-      // If we reached final state, handle it
-      if (state === PickState.FINAL_RESULT) {
-        await this.handleFinalResult();
+      if (this.session.mode !== 'voting') {
+        await this.renderSession();
       } else {
-        // Show the voting view
         this.sendMessage({ type: 'showVoting' });
-        
-        // Generate next pair to start voting
-        this.handleRequestNextPair();
+        await this.advance();
       }
-
     } catch (error) {
+      if (error instanceof BackendUnavailableError || error instanceof SidecarError) {
+        await this.reportBackendError(error);
+        return;
+      }
       logger.error(error, 'Error loading session');
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.sendMessage({
-        type: 'error',
-        message: `Error loading session: ${errorMessage}`
-      });
+      this.sendMessage({ type: 'error', message: `Error loading session: ${error instanceof Error ? error.message : String(error)}` });
     }
   }
 
@@ -1153,112 +946,51 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
   private handleWordEdited(originalWord: string, newWord: string) {
     try {
       logger.info(`Word edited: "${originalWord}" -> "${newWord}"`);
-      this.controller.updateWordInPair(originalWord, newWord);
+      if (this.currentPairTraces) {
+        const idx = this.currentPairTraces.indexOf(originalWord);
+        if (idx >= 0) {
+          this.currentPairTraces[idx] = newWord;
+        }
+      }
+      if (this.session?.current_pair) {
+        if (this.session.current_pair.trace1 === originalWord) {
+          this.session.current_pair.trace1 = newWord;
+        } else if (this.session.current_pair.trace2 === originalWord) {
+          this.session.current_pair.trace2 = newWord;
+        }
+      }
     } catch (error) {
       logger.error(error, 'Error updating word in pair');
-      // Don't send an error message to the UI since the edit already happened in the frontend.
-      // If the original word isn't found in the current pair, the update is silently ignored
-      // and the backend will use whichever word is actually in the pair when classification happens.
-      // This handles edge cases where the pair might have changed between edit and vote.
     }
   }
 
   private async handleVote(acceptedWord: string) {
     try {
-      this.controller.processVote(acceptedWord);
-      
-      const state = this.controller.getState();
-      const status = this.controller.getStatus();
-      
-      if (state === PickState.FINAL_RESULT) {
-        await this.handleFinalResult();
-      } else {
-        // Send updated status
-        this.sendMessage({
-          type: 'voteProcessed',
-          status
-        });
-        
-        // Generate next pair
-        this.handleRequestNextPair();
+      if (!this.session || !this.currentPairTraces) {
+        return;
       }
+      const [w1, w2] = this.currentPairTraces;
+      const rejectedWord = acceptedWord === w1 ? w2 : w1;
+      this.session = await this.backend.classify(this.session, acceptedWord, 'accept', 'pair');
+      this.session = await this.backend.classify(this.session, rejectedWord, 'reject', 'pair');
+      if (this.session.mode !== 'voting') {
+        await this.renderSession();
+        return;
+      }
+      this.sendMessage({ type: 'voteProcessed', status: this.sessionToStatus(this.session) });
+      await this.advance();
     } catch (error) {
+      if (error instanceof BackendUnavailableError || error instanceof SidecarError) {
+        await this.reportBackendError(error);
+        return;
+      }
       logger.error(error, 'Error processing vote');
-      this.sendMessage({
-        type: 'error',
-        message: `Error processing vote: ${error}`
-      });
+      this.sendMessage({ type: 'error', message: `Error processing vote: ${error instanceof Error ? error.message : String(error)}` });
     }
   }
 
   private async handleFinalResult() {
-    try {
-      const finalFormula = this.controller.getFinalFormula();
-      
-      // Get the actual words the user classified
-      const wordHistory = this.controller.getWordHistory();
-      const wordsIn = wordHistory
-        .filter(record => record.classification === 'accept')
-        .map(record => record.word);
-      const wordsOut = wordHistory
-        .filter(record => record.classification === 'reject')
-        .map(record => record.word);
-      
-      if (finalFormula === null) {
-        // All candidates were eliminated - none are correct
-        this.sendMessage({
-          type: 'noFormulaFound',
-          message: 'No candidate formulas match your requirements.',
-          candidateDetails: this.controller.getStatus().candidateDetails,
-          wordsIn,
-          wordsOut,
-          wordHistory,
-          historyRenderData: await this.buildHistoryRenderData(wordHistory.map(r => r.word))
-        });
-
-        // Track usage completion and potentially show survey prompt
-        await this.surveyPrompt.incrementUsageAndCheckPrompt();
-        
-        return;
-      }
-      
-      // Get status to send along with the final result
-      const status = this.controller.getStatus();
-      
-      // Safety check: should never send finalResult with null formula
-      if (finalFormula === null) {
-        logger.error(new Error('Attempted to send finalResult with null formula'), 'Invalid state');
-        this.sendMessage({
-          type: 'noFormulaFound',
-          message: 'No candidate formulas match your requirements.',
-          candidateDetails: status.candidateDetails,
-          wordsIn,
-          wordsOut,
-          wordHistory,
-          historyRenderData: await this.buildHistoryRenderData(wordHistory.map(r => r.word))
-        });
-        await this.surveyPrompt.incrementUsageAndCheckPrompt();
-        return;
-      }
-      
-      this.sendMessage({
-        type: 'finalResult',
-        formula: finalFormula,
-        wordsIn,
-        wordsOut,
-        status,
-        historyRenderData: await this.buildHistoryRenderData(status.wordHistory.map(r => r.word))
-      });
-      
-      // Track usage completion and potentially show survey prompt
-      await this.surveyPrompt.incrementUsageAndCheckPrompt();
-    } catch (error) {
-      logger.error(error, 'Error showing final results');
-      this.sendMessage({
-        type: 'error',
-        message: `Error showing results: ${error}`
-      });
-    }
+    await this.renderSession();
   }
 
   private async handleRefineCandidates(prompt: string, modelId?: string, modelChanged?: boolean, previousModelId?: string) {
@@ -1289,7 +1021,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       );
 
       // Get session data before refinement
-      const sessionData = this.controller.getSessionData();
+      const sessionData = { wordHistory: this.session ? this.historyToRecords(this.session) : [] };
       
       // Generate new candidate formulas using LLM
       // Dispose any existing cancellation token
@@ -1305,13 +1037,14 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       let candidates: LtlCandidate[] = [];
       let warnings: string[] = [];
+      let atoms: LtlAtom[] = [];
       try {
-        await this.analyzer.init();
         const result = await generateLtlFromDescription(prompt, this.cancellationTokenSource.token, modelId, {
           positiveExamples
         });
         candidates = result.candidates;
         warnings = result.warnings ?? [];
+        atoms = result.atoms ?? [];
         logger.info(`Generated ${candidates.length} candidates from LLM for refinement`);
 
         // Log each candidate with explanation
@@ -1411,155 +1144,34 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      this.sendMessage({ type: 'status', message: 'Validating model output (syntax checks)...' });
+      this.sendMessage({ type: 'status', message: 'Expanding candidates with misconception mutations…' });
 
-      // Check cancellation before filtering
-      if (this.cancellationTokenSource?.token.isCancellationRequested) {
-        logger.info('Operation cancelled before filtering duplicates (refinement)');
-        this.sendMessage({ 
-          type: 'cancelled', 
-          message: 'Operation cancelled by user.' 
-        });
-        return;
-      }
-
-      // Filter out invalid formulas and formulas with unsupported syntax
-      const validCandidates: LtlCandidate[] = [];
-      for (const candidate of candidates) {
-        const formula = candidate.formula;
-        const isValid = this.analyzer.isValidFormula(formula);
-        if (!isValid) {
-          logger.warn(`Filtered out invalid formula: "${formula}"`);
-          continue;
-        }
-
-        const hasSupported = await this.analyzer.hasSupportedSyntax(formula);
-        if (!hasSupported) {
-          logger.warn(`Filtered out formula with unsupported syntax: "${formula}"`);
-          continue;
-        }
-
-        validCandidates.push(candidate);
-      }
-
-      if (validCandidates.length === 0) {
-        this.sendMessage({ 
-          type: 'error', 
-          message: 'All generated candidates were invalid LTL (could not be parsed). Please try again.' 
-        });
-        return;
-      }
-
-      if (validCandidates.length < candidates.length) {
-        logger.info(`Filtered out ${candidates.length - validCandidates.length} invalid or unsupported formula(es)`);
-      }
-
-      // Filter out equivalent/duplicate formulas
-      this.sendMessage({ type: 'status', message: 'Filtering duplicate formulas...' });
-      let uniqueCandidates: string[] = [];
-      let equivalenceMap: Map<string, string[]> = new Map();
       try {
-        const deduped = await this.filterEquivalentFormulas(validCandidates.map(c => c.formula));
-        uniqueCandidates = deduped.uniqueFormulas;
-        equivalenceMap = deduped.equivalenceMap;
-      } catch (error) {
-        const errMsg = String(error);
-        if (this.cancellationTokenSource?.token.isCancellationRequested || errMsg.includes('cancelled')) {
-          logger.info('Duplicate filtering cancelled by user (refinement).');
-          this.sendMessage({
-            type: 'cancelled', 
-            message: 'Operation cancelled by user.' 
-          });
-          return;
-        }
-        throw error;
-      }
-      
-      // Check cancellation after filtering
-      if (this.cancellationTokenSource?.token.isCancellationRequested) {
-        logger.info('Operation cancelled after filtering duplicates (refinement)');
-        this.sendMessage({ 
-          type: 'cancelled', 
-          message: 'Operation cancelled by user.' 
-        });
+        await this.sidecar.ensureStarted();
+      } catch (startError) {
+        await this.reportBackendError(startError);
         return;
       }
 
-      // Inform user if duplicates were removed
-      if (uniqueCandidates.length < candidates.length) {
-        this.sendMessage({
-          type: 'status',
-          message: `Removed ${candidates.length - uniqueCandidates.length} duplicate formula(s). Proceeding with ${uniqueCandidates.length} unique candidate(s). Preserving ${sessionData.wordHistory.length} existing classifications.`
-        });
+      // Replay the user's prior classifications onto the rebuilt candidate pool.
+      const replayAccepts = sessionData.wordHistory
+        .filter(r => r.classification === WordClassification.ACCEPT)
+        .map(r => r.word);
+      const replayRejects = sessionData.wordHistory
+        .filter(r => r.classification === WordClassification.REJECT)
+        .map(r => r.word);
+
+      const seeds = selectTopCandidatesByConfidence(candidates, 2).map(candidate => ({
+        formula: candidate.formula,
+        explanation: candidate.explanation ?? '',
+        atoms: this.toSeedAtoms(atoms),
+        warnings: []
+      }));
+
+      this.session = await this.backend.buildCandidates({ prompt, seeds });
+      if (replayAccepts.length > 0 || replayRejects.length > 0) {
+        this.session = await this.backend.addExamples(this.session, replayAccepts, replayRejects);
       }
-
-      if (uniqueCandidates.length === 0) {
-        this.sendMessage({ 
-          type: 'error', 
-          message: 'All generated formulas were duplicates. Please try again with a different prompt.' 
-        });
-        return;
-      }
-
-      // Build metadata map for unique candidates (use highest confidence for duplicates)
-      const candidateMeta = new Map<string, LtlCandidate>();
-      validCandidates.forEach(candidate => {
-        const existing = candidateMeta.get(candidate.formula);
-        if (!existing || (candidate.confidence ?? 0) > (existing.confidence ?? 0)) {
-          candidateMeta.set(candidate.formula, candidate);
-        }
-      });
-
-      // Select top N candidates by confidence
-      const config = vscode.workspace.getConfiguration('pick-ltl');
-      const maxCandidates = config.get<number>('maxCandidates', 4);
-      const uniqueWithMeta = uniqueCandidates.map(formula => candidateMeta.get(formula)!);
-      const topCandidates = selectTopCandidatesByConfidence(uniqueWithMeta, maxCandidates);
-      const finalCandidateFormulas = topCandidates.map(c => c.formula);
-
-      // Check cancellation before refining candidates
-      if (this.cancellationTokenSource?.token.isCancellationRequested) {
-        logger.info('Operation cancelled before refining candidates');
-        this.sendMessage({ 
-          type: 'cancelled', 
-          message: 'Operation cancelled by user.' 
-        });
-        return;
-      }
-
-      // Refine candidates with preserved classifications
-      if (sessionData.wordHistory.length > 0) {
-        this.sendMessage({ 
-          type: 'status', 
-          message: `Re-applying your ${sessionData.wordHistory.length} previous classification${sessionData.wordHistory.length === 1 ? '' : 's'} to new candidates...` 
-        });
-      }
-      this.sendMessage({ type: 'status', message: 'Determining elimination thresholds...' });
-
-      const suggestedWords = this.collectEdgeCaseSuggestions(topCandidates);
-
-      const seeds = finalCandidateFormulas.map(formula => {
-        const meta = candidateMeta.get(formula);
-        return {
-          pattern: formula,
-          explanation: meta?.explanation,
-          confidence: meta?.confidence
-        };
-      });
-
-      // Filter equivalence map to only include selected candidates
-      const filteredEquivalenceMap = new Map<string, string[]>();
-      for (const formula of finalCandidateFormulas) {
-        const equivalents = equivalenceMap.get(formula);
-        if (equivalents) {
-          filteredEquivalenceMap.set(formula, equivalents);
-        }
-      }
-
-      await this.controller.refineCandidates(prompt, seeds, filteredEquivalenceMap, (current, total) => {
-        const percent = Math.round((current / total) * 100);
-        this.sendMessage({ type: 'status', message: `Determining elimination thresholds... ${percent}%` });
-      }, suggestedWords);
       
       // Check cancellation before sending results
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
@@ -1573,7 +1185,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       this.sendMessage({
         type: 'candidatesRefined',
-        candidates: this.controller.getStatus().candidateDetails,
+        candidates: this.sessionToCandidates(this.session!),
         preservedClassifications: sessionData.wordHistory.length
       });
 
@@ -1602,7 +1214,9 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
   }
 
   private handleReset(preserveClassifications = false) {
-    this.controller.reset(preserveClassifications);
+    this.session = null;
+    this.currentPairTraces = null;
+    this.currentPairClassified.clear();
     logger.info(`Reset requested from webview (preserveClassifications: ${preserveClassifications}).`);
     this.sendMessage({ type: 'reset', preserveClassifications });
   }
@@ -1618,161 +1232,16 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
     }
     this.stopActiveHeartbeat();
     
-    // Reset controller state
-    this.controller.reset(false);
+    // Reset session state
+    this.session = null;
+    this.currentPairTraces = null;
+    this.currentPairClassified.clear();
     
     // Notify webview
     this.sendMessage({ 
       type: 'cancelled', 
       message: 'Operation cancelled by user.' 
     });
-  }
-
-  /**
-   * Equivalence check with cancellation and timeout, using RB.isEquivalent.
-   */
-  private async checkEquivalenceWithTimeout(
-    a: string,
-    b: string,
-    timeoutMs = 5000,
-    token?: vscode.CancellationToken
-  ): Promise<boolean> {
-    const cancellationToken = token ?? this.cancellationTokenSource?.token;
-
-    const equivalencePromise = (async () => {
-      if (cancellationToken?.isCancellationRequested) {
-        throw new Error('Equivalence check cancelled by user');
-      }
-      return await this.analyzer.areEquivalent(a, b);
-    })();
-
-    const cancellationPromise = cancellationToken
-      ? new Promise<never>((_, reject) => cancellationToken.onCancellationRequested(() => reject(new Error('Equivalence check cancelled by user'))))
-      : undefined;
-
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Equivalence check timeout - formula too complex')), timeoutMs)
-    );
-
-    const racers: Promise<boolean>[] = [equivalencePromise, timeoutPromise];
-    if (cancellationPromise) {
-      racers.push(cancellationPromise);
-    }
-    
-    return await Promise.race(racers);
-  }
-
-  /**
-   * Filter out equivalent/duplicate formulas
-   */
-  private async filterEquivalentFormulas(formulas: string[]): Promise<{ uniqueFormulas: string[]; equivalenceMap: Map<string, string[]>; }> {
-    // PASS 1: Fast exact string deduplication (preserving order)
-    const seen = new Set<string>();
-    const exactUnique: string[] = [];
-    const duplicateBuckets = new Map<string, Set<string>>();
-
-    for (const formula of formulas) {
-      const bucket = duplicateBuckets.get(formula) ?? new Set<string>();
-      bucket.add(formula);
-      duplicateBuckets.set(formula, bucket);
-
-      if (!seen.has(formula)) {
-        seen.add(formula);
-        exactUnique.push(formula);
-      }
-    }
-    
-    logger.info(`After exact deduplication: ${exactUnique.length}/${formulas.length} unique formulas`);
-    
-    if (exactUnique.length <= 1) {
-      if (exactUnique.length === 1) {
-        const duplicates = duplicateBuckets.get(exactUnique[0]) ?? new Set<string>();
-        duplicates.delete(exactUnique[0]);
-        return {
-          uniqueFormulas: exactUnique,
-          equivalenceMap: new Map<string, string[]>([[exactUnique[0], Array.from(duplicates)]])
-        };
-      }
-      return {
-        uniqueFormulas: exactUnique,
-        equivalenceMap: new Map<string, string[]>()
-      };
-    }
-
-    // PASS 2: Semantic equivalence using direct automata analysis (RB)
-    // Skip sampling-based approaches and go straight to RB.isEquivalent for faster, more reliable deduplication
-    const unique: string[] = [];
-    const equivalenceMap = new Map<string, Set<string>>();
-    let automataAnalysisFailures = 0;
-
-    for (let i = 0; i < exactUnique.length; i++) {
-      const formula = exactUnique[i];
-      const duplicates = duplicateBuckets.get(formula) ?? new Set<string>();
-      duplicates.delete(formula);
-
-      // Check cancellation
-      if (this.cancellationTokenSource?.token.isCancellationRequested) {
-        throw new Error('Filtering cancelled by user');
-      }
-
-      let isEquivalent = false;
-      let equivalentTo: string | undefined;
-
-      for (const uniqueFormula of unique) {
-        // Check cancellation before each comparison
-        if (this.cancellationTokenSource?.token.isCancellationRequested) {
-          throw new Error('Filtering cancelled by user');
-        }
-        
-        // Direct automata-based equivalence check
-        try {
-          logger.info(`Equivalence check: comparing "${formula}" vs "${uniqueFormula}"...`);
-          const equivalent = await this.checkEquivalenceWithTimeout(formula, uniqueFormula, 8000, this.cancellationTokenSource?.token);
-
-          if (equivalent) {
-            logger.info(`Found equivalent: "${formula}" === "${uniqueFormula}"`);
-            isEquivalent = true;
-            equivalentTo = uniqueFormula;
-            break;
-          }
-        } catch (error) {
-          const errMsg = String(error);
-          if (errMsg.includes('cancelled')) {
-            throw error; // Re-throw cancellation
-          }
-
-          // Equivalence analysis failed or timed out. Log and conservatively keep both.
-          logger.warn(`Equivalence analysis failed for "${formula}" vs "${uniqueFormula}": ${errMsg}`);
-          automataAnalysisFailures++;
-        }
-      }
-
-      if (!isEquivalent) {
-        unique.push(formula);
-        equivalenceMap.set(formula, new Set<string>(duplicates));
-        logger.info(`Keeping unique formula: "${formula}" (${unique.length} total)`);
-      } else if (equivalentTo) {
-        const group = equivalenceMap.get(equivalentTo) ?? new Set<string>();
-        duplicates.forEach(d => group.add(d));
-        group.add(formula);
-        equivalenceMap.set(equivalentTo, group);
-      }
-    }
-
-    // Show warning if automata analysis failed for some formulas
-    if (automataAnalysisFailures > 0) {
-      const message = `Unexpected automata analysis failures (${automataAnalysisFailures}). Some formulas may not have been properly deduplicated.`;
-      logger.warn(message);
-    }
-
-    logger.info(`Final: ${unique.length}/${formulas.length} semantically unique formulas`);
-    const finalMap = new Map<string, string[]>();
-    for (const formula of unique) {
-      const equivalents = equivalenceMap.get(formula);
-      finalMap.set(formula, equivalents ? Array.from(equivalents) : []);
-    }
-
-    return { uniqueFormulas: unique, equivalenceMap: finalMap };
   }
 
   private sendMessage(message: any) {
@@ -1791,7 +1260,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const cautionIntro = 'This task may not be best suited for regular expressions.';
+    const cautionIntro = 'This task may not be best suited for LTLs.';
     
     let warningBody: string;
     if (formatted.length === 1) {
@@ -1840,7 +1309,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
     const out: Record<string, unknown> = {};
     for (const w of new Set(words)) {
       if (!this.renderCache.has(w)) {
-        this.renderCache.set(w, await this.analyzer.renderData(w));
+        this.renderCache.set(w, traceToRenderData(w));
       }
       const rd = this.renderCache.get(w);
       if (rd) {

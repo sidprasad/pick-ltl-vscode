@@ -2396,11 +2396,12 @@
                 // Render the classified trace as an SVG diagram (falls back to the
                 // lasso string shown below if render data is unavailable).
                 const histRender = lastHistoryRenderData && lastHistoryRenderData[item.word];
+                let svgShownHist = false;
                 if (!traceSyntaxMode && histRender && typeof TraceRenderer !== 'undefined' && TraceRenderer.render) {
                     const histTrace = document.createElement('div');
                     histTrace.className = 'trace-display trace-display--history';
                     historyItem.appendChild(histTrace);
-                    try { TraceRenderer.render(histTrace, histRender, {}); } catch (e) { /* fall back to text */ }
+                    try { TraceRenderer.render(histTrace, histRender, {}); svgShownHist = true; } catch (e) { /* fall back to text */ }
                 }
 
                 // Create word display section
@@ -2477,7 +2478,11 @@
                     matchesDiv.appendChild(matchesHeader);
                 }
 
-                contentDiv.appendChild(wordDisplay);
+                // Show the lasso string only when the SVG diagram isn't shown
+                // (render failed, or SPOT-syntax mode) — mirrors the pair view.
+                if (!svgShownHist) {
+                    contentDiv.appendChild(wordDisplay);
+                }
                 contentDiv.appendChild(matchesDiv);
 
                 // Create classification selector
