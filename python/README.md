@@ -27,6 +27,12 @@ self-contained. Re-sync it after upstream changes:
 
 ## One-time environment setup
 
+End users don't need to do this by hand: **PICK LTL: Set Up / Restart Backend**
+provisions the `pick-ltl` env automatically, downloading a private `micromamba`
+(see [`../src/micromamba.ts`](../src/micromamba.ts)) first when no conda tool is
+on PATH. The manual steps below are for development or when you want to manage
+the env yourself.
+
 `spot` is a compiled C++ library distributed via conda-forge (not PyPI), so the
 backend needs a conda environment:
 

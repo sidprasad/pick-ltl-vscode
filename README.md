@@ -1,6 +1,7 @@
 # PICK — LTL Builder
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/sidprasad/pick-ltl-vscode)
 
 # What it is
 
@@ -22,6 +23,26 @@ The LTL operators understood are `!`, `X`, `F`, `G`, `&`, `|`, `U`, `->`, `<->` 
 
 ---
 
+# Try it in a Codespace
+
+No local setup required — open this repo in a [GitHub Codespace](https://codespaces.new/sidprasad/pick-ltl-vscode) (or click the badge at the top). Two dev container configs are offered when you create the Codespace:
+
+- **clean — tests backend setup** (default): a Linux image with **no conda**, so it exercises PICK's automatic backend bootstrap. First backend start downloads `micromamba` and builds the env (a few minutes).
+- **prebuilt env — fast**: provisions the `pick-ltl` env (SPOT + deps) at container-build time, so the backend starts immediately. Best for just trying/using PICK; pair with [Codespaces prebuilds](https://docs.github.com/en/codespaces/prebuilding-your-codespaces) to make new Codespaces start fast.
+
+Then, in either config:
+
+1. Create the Codespace. The container builds the extension (`npm ci && npm run compile`).
+2. Press **F5** (*Run Extension*) to launch the Extension Development Host with PICK loaded. No marketplace release is involved — it runs this branch's source directly.
+3. Start the backend:
+   - **clean config** — the backend has no env yet, so click **Set Up Backend** on the prompt (or run **PICK LTL: Set Up / Restart Backend**) and choose **Set up automatically**. PICK downloads a private `micromamba` and builds the `pick-ltl` env (SPOT + deps); first run takes a few minutes.
+   - **prebuilt config** — the env is already built and auto-detected, so the backend starts on its own.
+4. When prompted, grant **Language Model** access (Copilot is preinstalled) and start authoring.
+
+> Codespaces builds from the branch you open on GitHub — not your local working tree — so push your branch first to try unmerged changes.
+
+---
+
 # Prerequisites
 
 PICK needs two things:
@@ -30,7 +51,7 @@ PICK needs two things:
 
 2. **A Python backend with SPOT** (for misconception mutation + trace generation). `spot` ships on conda-forge (not PyPI), so the backend lives in a conda environment. The simplest path:
 
-   - Run **PICK LTL: Set Up / Restart Backend** from the Command Palette. If a suitable environment isn't found and you have `conda`/`mamba`/`micromamba` installed, PICK offers to create a `pick-ltl` environment (`spot` + deps) for you in one click.
+   - Run **PICK LTL: Set Up / Restart Backend** from the Command Palette and choose **Set up automatically**. PICK creates a `pick-ltl` environment (`spot` + deps) for you in one click — using `conda`/`mamba`/`micromamba` if you already have one, otherwise downloading a small private `micromamba` first. No prior conda install is required.
    - Or create it yourself and let PICK auto-detect it:
      ```bash
      conda create -n pick-ltl python=3.12

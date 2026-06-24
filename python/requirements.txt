@@ -1,5 +1,9 @@
 # Python dependencies for the PICK LTL backend sidecar.
 #
+# The extension provisions this automatically ("PICK LTL: Set Up / Restart
+# Backend"), downloading micromamba first if no conda tool is present. The notes
+# below are for manual setup.
+#
 # IMPORTANT: `spot` is NOT on PyPI and cannot be installed with pip. Install it
 # from conda-forge into the same environment:
 #
