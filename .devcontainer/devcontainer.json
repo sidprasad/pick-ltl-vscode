@@ -1,7 +1,8 @@
 {
-  "name": "PICK: LTL Builder (clean — tests backend setup)",
+  "name": "PICK: LTL Builder",
   "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
-  "postCreateCommand": "npm ci && npm run compile",
+  "onCreateCommand": "bash .devcontainer/setup.sh",
+  "postCreateCommand": "code --install-extension \"$HOME/pick-ltl.vsix\" --force || echo 'If PICK is not in the sidebar, run: code --install-extension ~/pick-ltl.vsix  then reload the window.'",
   "customizations": {
     "vscode": {
       "extensions": [
