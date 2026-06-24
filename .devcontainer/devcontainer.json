@@ -1,11 +1,10 @@
 {
   "name": "PICK: LTL Builder",
   "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
-  "onCreateCommand": "bash .devcontainer/setup.sh",
-  "postCreateCommand": "code --install-extension \"$HOME/pick-ltl.vsix\" --force || echo 'If PICK is not in the sidebar, run: code --install-extension ~/pick-ltl.vsix  then reload the window.'",
   "customizations": {
     "vscode": {
       "extensions": [
+        "SiddharthaPrasad.pick-ltl",
         "github.copilot"
       ]
     }
