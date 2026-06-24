@@ -25,14 +25,11 @@ The LTL operators understood are `!`, `X`, `F`, `G`, `&`, `|`, `U`, `->`, `<->` 
 
 # Try it in a Codespace
 
-No local setup required — open this repo in a [GitHub Codespace](https://codespaces.new/sidprasad/pick-ltl-vscode) (or click the badge at the top). The container **builds the extension from source and installs it**, so PICK is already in the activity bar when the Codespace opens — no marketplace release involved.
+No local setup required — open this repo in a [GitHub Codespace](https://codespaces.new/sidprasad/pick-ltl-vscode) (or click the badge at the top). The dev container installs PICK from the Marketplace, so it's already in the activity bar when the Codespace opens.
 
-1. Create the Codespace and let setup finish — it packages the `.vsix` and installs it. If PICK isn't in the sidebar yet, reload the window (or run `code --install-extension ~/pick-ltl.vsix`).
-2. Open the **PICK LTL Builder** view in the activity bar.
-3. First time only: click **Set Up Backend** when prompted (or run **PICK LTL: Set Up / Restart Backend** → **Set up automatically**). The container has no conda, so PICK downloads `micromamba` and builds the `pick-ltl` env (SPOT + deps) — a few minutes, once.
-4. When prompted, grant **Language Model** access (Copilot is preinstalled) and start authoring.
-
-> Codespaces builds from the branch you open on GitHub — not your local working tree — so push your branch first to try unmerged changes.
+1. Open the **PICK LTL Builder** view in the activity bar.
+2. First time only: click **Set Up Backend** when prompted (or run **PICK LTL: Set Up / Restart Backend** → **Set up automatically**). The container has no conda, so PICK downloads `micromamba` and builds the `pick-ltl` env (SPOT + deps) — a few minutes, once.
+3. When prompted, grant **Language Model** access (Copilot is preinstalled) and start authoring.
 
 ---
 
