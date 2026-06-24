@@ -1,6 +1,7 @@
 # PICK — LTL Builder
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/sidprasad/pick-ltl-vscode)
 
 # What it is
 
@@ -22,6 +23,19 @@ The LTL operators understood are `!`, `X`, `F`, `G`, `&`, `|`, `U`, `->`, `<->` 
 
 ---
 
+# Try it in a Codespace
+
+No local setup required — open this repo in a [GitHub Codespace](https://codespaces.new/sidprasad/pick-ltl-vscode) (or click the badge at the top). The dev container is a clean Linux image with **no conda preinstalled**, which is also the best way to exercise PICK's automatic backend setup:
+
+1. Create the Codespace. It builds the extension (`npm ci && npm run compile`) on first start.
+2. Press **F5** (*Run Extension*) to launch the Extension Development Host with PICK loaded.
+3. Open the **PICK LTL Builder** view and run **Set Up / Restart Backend** → **Set up automatically**. With no conda present, PICK downloads a private `micromamba` and provisions the `pick-ltl` environment (SPOT + deps). First run takes a few minutes.
+4. When prompted, grant **Language Model** access (Copilot is preinstalled) and start authoring.
+
+> Codespaces builds from the branch you open on GitHub — not your local working tree — so push your branch first to try unmerged changes.
+
+---
+
 # Prerequisites
 
 PICK needs two things:
@@ -30,7 +44,7 @@ PICK needs two things:
 
 2. **A Python backend with SPOT** (for misconception mutation + trace generation). `spot` ships on conda-forge (not PyPI), so the backend lives in a conda environment. The simplest path:
 
-   - Run **PICK LTL: Set Up / Restart Backend** from the Command Palette. If a suitable environment isn't found and you have `conda`/`mamba`/`micromamba` installed, PICK offers to create a `pick-ltl` environment (`spot` + deps) for you in one click.
+   - Run **PICK LTL: Set Up / Restart Backend** from the Command Palette and choose **Set up automatically**. PICK creates a `pick-ltl` environment (`spot` + deps) for you in one click — using `conda`/`mamba`/`micromamba` if you already have one, otherwise downloading a small private `micromamba` first. No prior conda install is required.
    - Or create it yourself and let PICK auto-detect it:
      ```bash
      conda create -n pick-ltl python=3.12

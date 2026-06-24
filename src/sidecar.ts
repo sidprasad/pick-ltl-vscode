@@ -7,10 +7,12 @@
  *  - spawn the Flask app on a free localhost port,
  *  - wait until it answers, stream its logs, and tear it down on dispose.
  *
- * `spot` is not pip-installable, so the realistic distribution model is
- * "bring your own conda env": the user installs spot (conda) and points
- * `pick-ltl.backend.pythonPath` at that interpreter (or it is auto-detected
- * from a conda env named `pick-ltl`).
+ * `spot` is not pip-installable, so the backend needs a conda-family
+ * environment. When no conda/mamba/micromamba is on PATH the sidecar downloads
+ * a private `micromamba` (see ./micromamba) and provisions the `pick-ltl` env
+ * itself, so setup works with nothing preinstalled. Users may instead point
+ * `pick-ltl.backend.pythonPath` at their own spot-enabled interpreter (or it is
+ * auto-detected from a conda env named `pick-ltl`).
  */
 
 import * as vscode from 'vscode';
@@ -20,6 +22,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { logger } from './logger';
+import { ensureMicromamba } from './micromamba';
 
 export type SidecarFailureKind =
   | 'python-missing'
@@ -48,6 +51,15 @@ interface PreflightInfo {
   ok: boolean;
 }
 
+interface ProvisionManager {
+  /** Executable path or PATH command name. */
+  exe: string;
+  /** Environment to invoke it with (carries MAMBA_ROOT_PREFIX when bootstrapped). */
+  env: NodeJS.ProcessEnv;
+  /** Human-readable label for logs. */
+  label: string;
+}
+
 const ENV_NAME = 'pick-ltl';
 
 export class PythonSidecar {
@@ -56,10 +68,12 @@ export class PythonSidecar {
   private startPromise: Promise<string> | null = null;
   private readonly pythonDir: string;
   private readonly configDir: string;
+  private readonly managedDir: string;
 
   constructor(extensionUri: vscode.Uri, globalStorageUri: vscode.Uri) {
     this.pythonDir = vscode.Uri.joinPath(extensionUri, 'python').fsPath;
     this.configDir = vscode.Uri.joinPath(globalStorageUri, 'backend-config').fsPath;
+    this.managedDir = vscode.Uri.joinPath(globalStorageUri, 'micromamba').fsPath;
   }
 
   getBaseUrl(): string | null {
@@ -88,12 +102,12 @@ export class PythonSidecar {
     return this.ensureStarted();
   }
 
-  /** First available conda-family manager, or null. */
-  private detectCondaManager(): string | null {
+  /** First conda-family manager on PATH, or null. */
+  private detectPathManager(): ProvisionManager | null {
     for (const manager of ['mamba', 'micromamba', 'conda']) {
       try {
         cp.execFileSync(manager, ['--version'], { stdio: 'ignore', timeout: 8000 });
-        return manager;
+        return { exe: manager, env: process.env, label: manager };
       } catch {
         /* not on PATH */
       }
@@ -102,25 +116,48 @@ export class PythonSidecar {
   }
 
   /**
-   * Create the `pick-ltl` conda env (spot from conda-forge + pip deps) and return
-   * the new interpreter's absolute path. Throws SidecarError('python-missing') if
-   * no conda manager is available.
+   * A usable conda-family manager: one from PATH if present, otherwise a private
+   * micromamba downloaded into managed storage so setup works with nothing
+   * preinstalled. Throws SidecarError('python-missing') only when neither is
+   * available (e.g. offline, or an unsupported platform).
    */
-  async provisionEnvironment(log: (line: string) => void): Promise<string> {
-    const manager = this.detectCondaManager();
-    if (!manager) {
+  private async resolveProvisionManager(log: (line: string) => void): Promise<ProvisionManager> {
+    const onPath = this.detectPathManager();
+    if (onPath) {
+      return onPath;
+    }
+    try {
+      const mm = await ensureMicromamba(this.managedDir, log);
+      return {
+        exe: mm.exe,
+        env: { ...process.env, MAMBA_ROOT_PREFIX: mm.rootPrefix },
+        label: 'micromamba (downloaded)'
+      };
+    } catch (err) {
       throw new SidecarError(
         'python-missing',
-        'No conda/mamba/micromamba found to create the backend environment.',
-        'Install Miniforge (https://github.com/conda-forge/miniforge), then run "PICK LTL: Set Up / Restart Backend" again — or set "pick-ltl.backend.pythonPath" manually.'
+        'No conda/mamba/micromamba found, and PICK could not download micromamba to set one up.',
+        `${err instanceof Error ? err.message : String(err)}\n\n` +
+          'Check your internet connection and run "PICK LTL: Set Up / Restart Backend" again, ' +
+          'or install Miniforge (https://github.com/conda-forge/miniforge) and retry, ' +
+          'or set "pick-ltl.backend.pythonPath" to a Python that has spot installed.'
       );
     }
+  }
+
+  /**
+   * Create the `pick-ltl` conda env (spot from conda-forge + pip deps) and return
+   * the new interpreter's absolute path. Uses a PATH manager when present,
+   * otherwise a downloaded micromamba.
+   */
+  async provisionEnvironment(log: (line: string) => void): Promise<string> {
+    const manager = await this.resolveProvisionManager(log);
 
     const requirements = path.join(this.pythonDir, 'requirements.txt');
     const run = (file: string, args: string[]): Promise<void> =>
       new Promise((resolve, reject) => {
         log(`$ ${file} ${args.join(' ')}`);
-        const proc = cp.spawn(file, args, { env: process.env });
+        const proc = cp.spawn(file, args, { env: manager.env });
         const pipe = (chunk: unknown) => {
           const text = String(chunk).replace(/\s+$/, '');
           if (text) {
@@ -135,14 +172,14 @@ export class PythonSidecar {
         );
       });
 
-    log(`Creating conda environment "${ENV_NAME}" with ${manager} (this can take a few minutes)…`);
-    await run(manager, ['create', '-y', '-n', ENV_NAME, '-c', 'conda-forge', 'spot', 'python=3.12']);
-    await run(manager, ['run', '-n', ENV_NAME, 'python', '-m', 'pip', 'install', '-r', requirements]);
+    log(`Creating conda environment "${ENV_NAME}" with ${manager.label} (this can take a few minutes)…`);
+    await run(manager.exe, ['create', '-y', '-n', ENV_NAME, '-c', 'conda-forge', 'spot', 'python=3.12']);
+    await run(manager.exe, ['run', '-n', ENV_NAME, 'python', '-m', 'pip', 'install', '-r', requirements]);
 
     const out = cp.execFileSync(
-      manager,
+      manager.exe,
       ['run', '-n', ENV_NAME, 'python', '-c', 'import sys; print(sys.executable)'],
-      { encoding: 'utf8', timeout: 20000 }
+      { encoding: 'utf8', timeout: 20000, env: manager.env }
     );
     const pythonPath = out.trim().split('\n').filter(Boolean).pop() ?? '';
     if (!pythonPath) {
@@ -172,6 +209,9 @@ export class PythonSidecar {
       isWin
         ? path.join(root, 'envs', ENV_NAME, 'python.exe')
         : path.join(root, 'envs', ENV_NAME, 'bin', 'python');
+
+    // A private micromamba env bootstrapped by provisionEnvironment, if present.
+    candidates.push(envPython(path.join(this.managedDir, 'root')));
 
     // Active conda env (and its sibling `pick-ltl` env), if any.
     const condaPrefix = process.env.CONDA_PREFIX;

@@ -92,16 +92,16 @@ export function activate(context: vscode.ExtensionContext) {
                         }
 
                         const choice = await vscode.window.showWarningMessage(
-                                `${(error as SidecarError).message}\n\nPICK can create a conda environment named "pick-ltl" (SPOT from conda-forge) for you. This downloads packages and may take a few minutes.`,
+                                `${(error as SidecarError).message}\n\nPICK can set up its backend automatically: if no conda tool is found it first downloads a small package manager (micromamba), then creates a conda environment named "pick-ltl" with SPOT from conda-forge. This downloads a few hundred MB and may take several minutes.`,
                                 { modal: true },
-                                'Create environment',
+                                'Set up automatically',
                                 'Show instructions'
                         );
                         if (choice === 'Show instructions') {
                                 logger.show();
                                 return;
                         }
-                        if (choice !== 'Create environment') {
+                        if (choice !== 'Set up automatically') {
                                 return;
                         }
 
