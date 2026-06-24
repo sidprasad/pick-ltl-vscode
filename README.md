@@ -25,11 +25,18 @@ The LTL operators understood are `!`, `X`, `F`, `G`, `&`, `|`, `U`, `->`, `<->` 
 
 # Try it in a Codespace
 
-No local setup required — open this repo in a [GitHub Codespace](https://codespaces.new/sidprasad/pick-ltl-vscode) (or click the badge at the top). The dev container is a clean Linux image with **no conda preinstalled**, which is also the best way to exercise PICK's automatic backend setup:
+No local setup required — open this repo in a [GitHub Codespace](https://codespaces.new/sidprasad/pick-ltl-vscode) (or click the badge at the top). Two dev container configs are offered when you create the Codespace:
 
-1. Create the Codespace. It builds the extension (`npm ci && npm run compile`) on first start.
-2. Press **F5** (*Run Extension*) to launch the Extension Development Host with PICK loaded.
-3. Open the **PICK LTL Builder** view and run **Set Up / Restart Backend** → **Set up automatically**. With no conda present, PICK downloads a private `micromamba` and provisions the `pick-ltl` environment (SPOT + deps). First run takes a few minutes.
+- **clean — tests backend setup** (default): a Linux image with **no conda**, so it exercises PICK's automatic backend bootstrap. First backend start downloads `micromamba` and builds the env (a few minutes).
+- **prebuilt env — fast**: provisions the `pick-ltl` env (SPOT + deps) at container-build time, so the backend starts immediately. Best for just trying/using PICK; pair with [Codespaces prebuilds](https://docs.github.com/en/codespaces/prebuilding-your-codespaces) to make new Codespaces start fast.
+
+Then, in either config:
+
+1. Create the Codespace. The container builds the extension (`npm ci && npm run compile`).
+2. Press **F5** (*Run Extension*) to launch the Extension Development Host with PICK loaded. No marketplace release is involved — it runs this branch's source directly.
+3. Start the backend:
+   - **clean config** — the backend has no env yet, so click **Set Up Backend** on the prompt (or run **PICK LTL: Set Up / Restart Backend**) and choose **Set up automatically**. PICK downloads a private `micromamba` and builds the `pick-ltl` env (SPOT + deps); first run takes a few minutes.
+   - **prebuilt config** — the env is already built and auto-detected, so the backend starts on its own.
 4. When prompted, grant **Language Model** access (Copilot is preinstalled) and start authoring.
 
 > Codespaces builds from the branch you open on GitHub — not your local working tree — so push your branch first to try unmerged changes.

@@ -1,7 +1,7 @@
 {
-  "name": "PICK: LTL Builder (clean — tests backend setup)",
+  "name": "PICK: LTL Builder (prebuilt env — fast)",
   "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
-  "postCreateCommand": "npm ci && npm run compile",
+  "onCreateCommand": "bash .devcontainer/prebuilt-env/setup.sh",
   "customizations": {
     "vscode": {
       "extensions": [
