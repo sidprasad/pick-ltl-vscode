@@ -146,16 +146,42 @@ function sanitizeAtoms(rawAtoms: unknown): LtlAtom[] {
   return out.filter(a => (seen.has(a.name) ? false : (seen.add(a.name), true)));
 }
 
-export function sanitizeWarnings(rawWarnings: unknown): string[] {
+/**
+ * Minimum self-reported confidence for an "inexpressible in LTL" warning to be
+ * surfaced. The "this may not be well suited to LTL" notice should appear only
+ * when the model is REALLY sure, so we require a high confidence per warning
+ * (the previous code surfaced every warning string, which fired far too often).
+ */
+export const WARNING_CONFIDENCE_THRESHOLD = 0.85;
+
+/**
+ * Keep only the expressibility warnings the model is highly confident about.
+ * Each warning is expected as `{ issue: string, confidence: number }`. Bare
+ * strings carry no confidence signal (we can't tell the model is "really sure"),
+ * and low-confidence items are dropped — so the notice is rare and justified.
+ */
+export function extractExpressibilityWarnings(
+  rawWarnings: unknown,
+  threshold: number = WARNING_CONFIDENCE_THRESHOLD
+): string[] {
   if (!Array.isArray(rawWarnings)) {
     return [];
   }
-  const normalized = rawWarnings
-    .filter(candidate => typeof candidate === 'string')
-    .map(candidate => candidate.trim())
-    .filter(candidate => candidate.length > 0)
-    .map(candidate => candidate.slice(0, 240));
-  return Array.from(new Set(normalized)).slice(0, 3);
+  const kept: string[] = [];
+  for (const item of rawWarnings) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const { issue, confidence } = item as { issue?: unknown; confidence?: unknown };
+    if (typeof issue !== 'string' || typeof confidence !== 'number') {
+      continue;
+    }
+    const text = issue.trim();
+    if (text.length > 0 && confidence >= threshold) {
+      kept.push(text.slice(0, 240));
+    }
+  }
+  return Array.from(new Set(kept)).slice(0, 3);
 }
 
 export async function generateLtlFromDescription(
@@ -204,7 +230,7 @@ export async function generateLtlFromDescription(
       "  \"candidates\": [",
       "    {\"formula\": \"<LTL>\", \"explanation\": \"<why this interpretation>\", \"confidence\": 0.0}",
       "  ],",
-      "  // warnings: [\"<caution>\"]   // optional",
+      "  // \"warnings\": [ {\"issue\": \"<why this CANNOT be expressed in LTL>\", \"confidence\": 0.0} ]   // optional; omit unless highly confident",
       "}",
       "",
       "LTL syntax rules (STRICT):",
@@ -218,7 +244,8 @@ export async function generateLtlFromDescription(
       "- \"candidates\" must contain 3–5 items, diverse in meaning (e.g. safety vs liveness, scope of G/F, strict vs non-strict).",
       "- Each candidate: formula (LTL string using only the allowed syntax), explanation, confidence in [0,1].",
       "- Do NOT include example traces or any trace data — traces are generated formally by the engine, never by you.",
-      "- Add warnings (max 2–3, short) if the description is not expressible in LTL (e.g. counting, real-time bounds, data values).",
+      "- Warnings are almost never needed. Emit one ONLY when you are highly confident (confidence >= 0.85) the requirement is genuinely inexpressible in LTL: it requires counting/arithmetic, real-time or wall-clock bounds, data values, or probabilities. The vast majority of ordering and temporal properties ARE expressible in LTL — do NOT warn for those, and do NOT warn merely because a requirement is complex or could be interpreted several ways.",
+      "- Each warning is an object {\"issue\": short reason it cannot be expressed, \"confidence\": number in [0,1]}. When in any doubt, return \"warnings\": [] — prefer no warning over a speculative one.",
       "",
       `Description: ${description}`,
       ...exampleLines,
@@ -311,7 +338,7 @@ export async function generateLtlFromDescription(
   }
 
   const parsed = JSON.parse(jsonMatch[0]);
-  const warnings = sanitizeWarnings(parsed.warnings);
+  const warnings = extractExpressibilityWarnings(parsed.warnings);
   const atoms = sanitizeAtoms(parsed.atoms);
   const declaredAtoms = new Set(atoms.map(a => a.name));
 
