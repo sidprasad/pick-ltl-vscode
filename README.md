@@ -7,13 +7,13 @@
 
 PICK (Pairwise Iterative-Choice Knockout) helps you make smart use of generative AI to author **Linear Temporal Logic (LTL)** formulas. You describe a temporal property in natural language; PICK proposes several candidate formulas and helps you converge on the one you actually mean by classifying concrete example **traces**.
 
-This is the LTL counterpart of PICK-Formula. The formal analysis — **misconception-based candidate mutation** and **SPOT**-backed distinguishing-trace generation — runs in a local Python sidecar that the extension launches and supervises for you.
+The formal analysis — **misconception-based candidate mutation** and **SPOT**-backed distinguishing-trace generation — runs in a local Python sidecar that the extension launches and supervises for you.
 
 ---
 
 # How it works
 
-1. Asks a language model for one or two **seed** LTL formulas capturing how your description might be interpreted, then expands them in the Python backend with **misconception mutations** (8 common LTL misunderstandings — e.g. dropping an eventually/always, swapping `G`/`F`, weak/exclusive until) to build a pool of plausible-but-distinct candidates.
+1. Asks a language model for **seed** LTL formulas capturing how your description might be interpreted, then expands them in the Python backend with **misconception mutations**.
 2. Uses **SPOT** to generate **distinguishing traces** — ultimately-periodic (lasso) words the candidates disagree on — and renders each as an **SVG diagram** (state boxes, cycle arc, positive/negated literals).
 3. Asks you to upvote/downvote whether each trace *should* satisfy your intended property. Each vote is really a decision about the candidate formulas.
 4. Eliminates candidates that disagree with your classifications. You can **revise** your description at any time; PICK retains all your classifications.
@@ -64,7 +64,7 @@ All settings appear under the `pick-ltl` section in VS Code Settings, including:
 - `pick-ltl.backend.port` (number, default 0) — localhost port for the sidecar; 0 picks a free one.
 - `pick-ltl.surveyPromptEnabled` (boolean, default true).
 
-Candidate count and elimination thresholds are determined by the backend (misconception expansion + SPOT), so the older TS-era vote/threshold/candidate knobs have been removed.
+Candidate count and elimination thresholds are determined by the backend (misconception expansion + SPOT).
 
 ---
 

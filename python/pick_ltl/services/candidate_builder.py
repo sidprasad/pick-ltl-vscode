@@ -22,7 +22,17 @@ MUTATION_EXPLANATIONS = {
     MisconceptionCode.OtherImplicit.value: "Under-constrains the seed interpretation by removing part of the temporal structure.",
     MisconceptionCode.WeakU.value: "Reads an until-condition as if the right side may never need to happen.",
 }
+SYNTACTIC_MUTATION_DEVIATION = "Operator-level variant of the seed interpretation."
 DEFAULT_ELIMINATION_THRESHOLD = 2
+
+
+def _mutation_explanation(seed: SeedFormulaResult, deviation: str) -> str:
+    """Explanation for a mutation-derived candidate: the seed's own text (what
+    interpretation it deviates from) followed by how this candidate deviates."""
+    base = (seed.explanation or "").strip() or seed.formula
+    if not base:
+        return deviation
+    return f"{base.rstrip('. ')}. {deviation}"
 
 
 @contextmanager
@@ -170,13 +180,11 @@ def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaSta
                 if not formula or formula in seen_formulas or _is_equivalent(formula, seen_formulas):
                     continue
                 code = result.misconception.value
+                deviation = MUTATION_EXPLANATIONS.get(code, "Conceptual variant of the seed interpretation.")
                 semantic_pool.append(
                     {
                         "formula": formula,
-                        "explanation": MUTATION_EXPLANATIONS.get(
-                            code,
-                            "Conceptual variant of the main interpretation.",
-                        ),
+                        "explanation": _mutation_explanation(seed, deviation),
                         "origin": CandidateOrigin(kind="semantic_mutation", misconception_code=code),
                     }
                 )
@@ -212,7 +220,7 @@ def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaSta
                 candidates.append(
                     CandidateFormulaState(
                         formula=formula,
-                        explanation="Operator-level variant of the main interpretation.",
+                        explanation=_mutation_explanation(seed, SYNTACTIC_MUTATION_DEVIATION),
                         origin=CandidateOrigin(kind="syntactic_mutation", misconception_code=None),
                     )
                 )

@@ -6,7 +6,11 @@ pytest.importorskip("spot")
 
 from pick_ltl.ltl.ltlnode import LTLNode
 from pick_ltl.ltl.traceprocessor import getFormulaLiterals
-from pick_ltl.services.candidate_builder import build_candidates
+from pick_ltl.services.candidate_builder import (
+    MUTATION_EXPLANATIONS,
+    SYNTACTIC_MUTATION_DEVIATION,
+    build_candidates,
+)
 from pick_ltl.session.models import AtomSpec, SeedFormulaResult
 
 VALID_ORIGINS = {"seed", "semantic_mutation", "syntactic_mutation"}
@@ -82,3 +86,32 @@ def test_every_candidate_has_positive_threshold_and_valid_origin():
 def test_seed_formula_is_present_in_pool():
     candidates = build_candidates([seed("G(r -> F(b))", ["r", "b"])])
     assert any(LTLNode.equiv(c.formula, "G(r -> F(b))") for c in candidates)
+
+
+def test_mutation_explanations_combine_seed_text_and_misconception():
+    seed_text = "whenever r holds, b holds eventually"
+    seeds = [
+        SeedFormulaResult(
+            formula="G(r -> F(b))",
+            explanation=seed_text,
+            atoms=[AtomSpec("r", "r"), AtomSpec("b", "b")],
+            warnings=[],
+        )
+    ]
+    candidates = build_candidates(seeds)
+
+    # The seed candidate keeps its own text verbatim.
+    seed_candidate = next(c for c in candidates if c.origin.kind == "seed")
+    assert seed_candidate.explanation == seed_text
+
+    mutations = [c for c in candidates if c.origin.kind in ("semantic_mutation", "syntactic_mutation")]
+    assert mutations, "expected at least one mutation-derived candidate"
+    for c in mutations:
+        # Leads with the seed's text (what this candidate is a deviation of)...
+        assert c.explanation.startswith(seed_text.rstrip(". ")), c.explanation
+        # ...then appends the deviation description.
+        assert len(c.explanation) > len(seed_text)
+        if c.origin.kind == "semantic_mutation" and c.origin.misconception_code in MUTATION_EXPLANATIONS:
+            assert MUTATION_EXPLANATIONS[c.origin.misconception_code] in c.explanation
+        if c.origin.kind == "syntactic_mutation":
+            assert SYNTACTIC_MUTATION_DEVIATION in c.explanation
