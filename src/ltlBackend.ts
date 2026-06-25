@@ -178,6 +178,9 @@ export class LtlBackend {
     prompt: string;
     seeds?: SeedFormulaResult[];
     seed?: SeedFormulaResult;
+    /** Pin the proposition set (refine sends the original atoms so replayed
+     * classifications stay valid). Omit on the initial build. */
+    allowed_atoms?: string[];
   }): Promise<SessionState> {
     return this.request('/api/candidates/build', args);
   }

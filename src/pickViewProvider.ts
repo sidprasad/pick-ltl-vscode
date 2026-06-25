@@ -6,7 +6,7 @@ import { generateLtlFromDescription, PermissionRequiredError, NoModelsAvailableE
 import { logger } from './logger';
 import { openIssueReport } from './issueReporter';
 import { SurveyPrompt } from './surveyPrompt';
-import { LtlBackend, BackendUnavailableError, SessionState } from './ltlBackend';
+import { LtlBackend, BackendUnavailableError, SessionState, AtomSpec } from './ltlBackend';
 import { PythonSidecar, SidecarError } from './sidecar';
 import { traceToRenderData } from './traceRender';
 
@@ -25,6 +25,18 @@ export function orderCandidatesByConfidence(candidates: LtlCandidate[]): LtlCand
     `(confidence: ${sorted.map(c => c.confidence ?? 0).join(', ')}); backend dedupes equivalents.`
   );
   return sorted;
+}
+
+/** Dedupe atom specs by name (first meaning wins), dropping unnamed entries. */
+export function dedupeAtomsByName(atoms: AtomSpec[]): AtomSpec[] {
+  const byName = new Map<string, AtomSpec>();
+  for (const atom of atoms) {
+    const name = (atom?.name ?? '').trim();
+    if (name && !byName.has(name)) {
+      byName.set(name, { name, meaning: atom.meaning ?? '' });
+    }
+  }
+  return Array.from(byName.values());
 }
 
 export class PickViewProvider implements vscode.WebviewViewProvider {
@@ -616,12 +628,28 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      // The model can emit malformed LTL; the backend skips those seeds rather
+      // than failing the build. If nothing usable survived, stop here with a
+      // clear message (and any skip warnings) instead of advancing into an empty
+      // voting loop.
+      const built = this.sessionToCandidates(this.session!);
+      if (built.length === 0) {
+        this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
+        this.sendMessage({
+          type: 'error',
+          message:
+            this.session?.message ||
+            'The model did not return any usable LTL formulas. Please try generating candidates again.'
+        });
+        return;
+      }
+
       this.sendMessage({
         type: 'candidatesGenerated',
-        candidates: this.sessionToCandidates(this.session!)
+        candidates: built
       });
 
-      this.surfaceModelWarnings(warnings);
+      this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
 
       // Check cancellation before generating first pair
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
@@ -1012,6 +1040,14 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       // Get session data before refinement
       const sessionData = { wordHistory: this.session ? this.historyToRecords(this.session) : [] };
+
+      // Pin the proposition set to the original session's alphabet. Re-prompting
+      // must not change which atoms exist, or the prior classifications we replay
+      // below (traces over the old propositions) become meaningless.
+      const originalAtomSpecs = dedupeAtomsByName(
+        (this.session?.seeds ?? []).flatMap(s => s.atoms ?? [])
+      );
+      const allowedAtomNames = originalAtomSpecs.map(a => a.name).filter(Boolean);
       
       // Generate new candidate formulas using LLM
       // Dispose any existing cancellation token
@@ -1154,11 +1190,17 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       const seeds = orderCandidatesByConfidence(candidates).map(candidate => ({
         formula: candidate.formula,
         explanation: candidate.explanation ?? '',
-        atoms: this.toSeedAtoms(atoms),
+        // Keep the original alphabet on the seeds so the session carries it into
+        // any future refine; fall back to the model's atoms for legacy sessions.
+        atoms: originalAtomSpecs.length > 0 ? originalAtomSpecs : this.toSeedAtoms(atoms),
         warnings: []
       }));
 
-      this.session = await this.backend.buildCandidates({ prompt, seeds });
+      this.session = await this.backend.buildCandidates({
+        prompt,
+        seeds,
+        ...(allowedAtomNames.length > 0 ? { allowed_atoms: allowedAtomNames } : {})
+      });
       if (replayAccepts.length > 0 || replayRejects.length > 0) {
         this.session = await this.backend.addExamples(this.session, replayAccepts, replayRejects);
       }
@@ -1173,13 +1215,25 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      const builtRefined = this.sessionToCandidates(this.session!);
+      if (builtRefined.length === 0) {
+        this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
+        this.sendMessage({
+          type: 'error',
+          message:
+            this.session?.message ||
+            'The model did not return any usable LTL formulas. Please try again.'
+        });
+        return;
+      }
+
       this.sendMessage({
         type: 'candidatesRefined',
-        candidates: this.sessionToCandidates(this.session!),
+        candidates: builtRefined,
         preservedClassifications: sessionData.wordHistory.length
       });
 
-      this.surfaceModelWarnings(warnings);
+      this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
 
       // Check cancellation before generating first pair
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
