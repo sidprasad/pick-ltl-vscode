@@ -113,6 +113,56 @@ def test_lone_discriminator_is_paired_with_accepted_by_none():
     assert not any(sig2), "partner trace should be accepted by none of the candidates"
 
 
+def test_sole_candidate_needs_an_upvote_before_finalizing():
+    # A lone candidate must not be declared final until the user has accepted a
+    # trace it matches. next_pair should first show a confirming example.
+    from pick_ltl.ltl.spotutils import is_trace_satisfied
+    from pick_ltl.session.engine import classify_trace, next_pair
+    from pick_ltl.session.models import CandidateFormulaState, CandidateOrigin
+
+    session = SessionState(
+        candidate_states=[CandidateFormulaState(formula="G(a)", explanation="", origin=CandidateOrigin(kind="seed"))],
+        mode="single_candidate",
+    )
+
+    session = next_pair(session)
+    # Not finalized yet: a confirmation pair is shown instead.
+    assert session.final_result is None
+    assert session.mode == "voting"
+    assert session.current_pair is not None
+    # The first trace is one the candidate accepts (the upvote opportunity).
+    assert is_trace_satisfied(session.current_pair.trace1, "G(a)")
+
+    # Accepting it gives the upvote -> now it may finalize.
+    session = classify_trace(session, session.current_pair.trace1, "accept")
+    assert session.candidate_states[0].positive_votes >= 1
+    assert session.final_result is not None and session.final_result.formula
+    assert session.mode in ("final_result", "single_candidate")
+
+
+def test_sole_candidate_only_rejected_never_finalizes():
+    # If the user only ever rejects, the lone candidate accrues downvotes and is
+    # eliminated (no result) — it is never silently accepted as final.
+    from pick_ltl.session.engine import classify_trace, next_pair
+    from pick_ltl.session.models import CandidateFormulaState, CandidateOrigin
+
+    session = SessionState(
+        candidate_states=[CandidateFormulaState(formula="G(a)", explanation="", origin=CandidateOrigin(kind="seed"), elimination_threshold=2)],
+        mode="single_candidate",
+    )
+    for _ in range(8):
+        session = next_pair(session)
+        if session.current_pair is None:
+            break
+        # Reject the trace the candidate accepts -> contradiction (downvote).
+        session = classify_trace(session, session.current_pair.trace1, "reject")
+        if session.mode in ("no_result", "final_result", "single_candidate"):
+            break
+    assert session.candidate_states[0].positive_votes == 0
+    # Never finalized off zero upvotes.
+    assert not (session.final_result and session.final_result.formula)
+
+
 def test_exhaustion_is_clean_when_no_question_remains():
     # A single trivial candidate cannot be split further; the loop must end in a
     # terminal state, never by emitting a duplicate/degenerate pair.

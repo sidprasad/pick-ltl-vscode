@@ -40,7 +40,15 @@ def build_candidates():
         if not isinstance(seed_payload, dict):
             raise ApiError("Expected a seed payload.")
         seeds = [SeedFormulaResult.from_dict(seed_payload)]
-    session = create_initial_session(prompt, provider, seeds)
+    # Optional: pin the proposition set (refine sends the original session's
+    # atoms so the alphabet — and thus replayed classifications — stay valid).
+    raw_atoms = payload.get("allowed_atoms")
+    allowed_atoms = (
+        {str(a).strip() for a in raw_atoms if str(a).strip()}
+        if isinstance(raw_atoms, list) and raw_atoms
+        else None
+    )
+    session = create_initial_session(prompt, provider, seeds, allowed_atoms=allowed_atoms)
     return jsonify(session.to_dict())
 
 

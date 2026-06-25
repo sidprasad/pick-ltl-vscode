@@ -67,6 +67,13 @@ def _safe_parse(formula: str) -> LTLNode | None:
         return None
 
 
+def _safe_literals(formula: str) -> set[str]:
+    try:
+        return set(getFormulaLiterals(formula))
+    except Exception:
+        return set()
+
+
 def _normalize_formula(formula: str, allowed_atoms: set[str]) -> str | None:
     try:
         normalized = str(parse_ltl_string(formula))
@@ -198,11 +205,19 @@ def _merge_atoms(seeds: list[SeedFormulaResult]) -> list:
     return merged
 
 
-def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaState]:
+def build_candidates(
+    seeds: list[SeedFormulaResult],
+    allowed_atoms: set[str] | None = None,
+) -> list[CandidateFormulaState]:
     if not seeds:
         return []
 
-    allowed_atoms = {atom.name for atom in _merge_atoms(seeds)}
+    # When allowed_atoms is passed explicitly (refine pins it to the original
+    # session's alphabet), it is authoritative and seeds that introduce new
+    # propositions are dropped. Otherwise (initial build) it is derived from the
+    # seeds and only constrains mutants.
+    enforce_atoms = allowed_atoms is not None
+    allowed_atoms = set(allowed_atoms) if enforce_atoms else {atom.name for atom in _merge_atoms(seeds)}
     candidates: list[CandidateFormulaState] = []
     seen_formulas: list[str] = []
 
@@ -213,8 +228,14 @@ def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaSta
     parsed_seeds: list[tuple[SeedFormulaResult, LTLNode]] = []
     for seed in seeds:
         node = _safe_parse(seed.formula)
-        if node is not None:
-            parsed_seeds.append((seed, node))
+        if node is None:
+            continue
+        # Refine keeps the proposition set fixed: a seed that uses a proposition
+        # outside the original alphabet would make replayed classifications
+        # meaningless, so drop it.
+        if enforce_atoms and not _safe_literals(seed.formula).issubset(allowed_atoms):
+            continue
+        parsed_seeds.append((seed, node))
     if not parsed_seeds:
         return []
 
@@ -295,8 +316,13 @@ def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaSta
     return candidates
 
 
-def create_initial_session(prompt: str, provider: dict, seeds: list[SeedFormulaResult]) -> SessionState:
-    candidates = build_candidates(seeds)
+def create_initial_session(
+    prompt: str,
+    provider: dict,
+    seeds: list[SeedFormulaResult],
+    allowed_atoms: set[str] | None = None,
+) -> SessionState:
+    candidates = build_candidates(seeds, allowed_atoms=allowed_atoms)
 
     primary_seed = seeds[0] if seeds else None
     warnings: list[str] = []
@@ -310,6 +336,21 @@ def create_initial_session(prompt: str, provider: dict, seeds: list[SeedFormulaR
         warnings.append(
             "Some interpretations from the model were not valid LTL and were skipped."
         )
+    # On refine the alphabet is pinned: note any interpretations dropped for
+    # introducing new propositions, so the user knows the set was kept stable.
+    if allowed_atoms is not None:
+        allowed = set(allowed_atoms)
+        out_of_alphabet = [
+            seed.formula
+            for seed in seeds
+            if _safe_parse(seed.formula) is not None
+            and not _safe_literals(seed.formula).issubset(allowed)
+        ]
+        if out_of_alphabet:
+            warnings.append(
+                "Some refined interpretations used propositions outside the original "
+                "set and were skipped, to keep your earlier classifications valid."
+            )
     warnings = list(dict.fromkeys(warnings))
 
     mode = "voting"

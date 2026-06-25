@@ -145,6 +145,28 @@ def test_no_candidate_is_degenerate():
     assert not degenerate, f"degenerate candidates survived: {degenerate}"
 
 
+def test_allowed_atoms_pins_alphabet_on_refine():
+    # With the proposition set pinned (as refine does), a seed that introduces a
+    # new proposition is dropped, and no produced candidate references it — so
+    # earlier classifications (traces over the original atoms) stay meaningful.
+    seeds = [
+        seed("G(a -> X(b))", ["a", "b", "c"]),
+        seed("G(a -> c)", ["a", "b", "c"]),
+    ]
+    candidates = build_candidates(seeds, allowed_atoms={"a", "b"})
+    formulas = [c.formula for c in candidates]
+    assert any(LTLNode.equiv(f, "G(a -> X(b))") for f in formulas), formulas
+    for c in candidates:
+        assert "c" not in getFormulaLiterals(c.formula), c.formula
+
+
+def test_initial_build_does_not_drop_seeds_by_atoms():
+    # Without an explicit allowed_atoms (initial build), the alphabet is derived
+    # from the seeds and seeds are not dropped for their own literals.
+    candidates = build_candidates([seed("G(a -> c)", ["a", "c"])])
+    assert any(LTLNode.equiv(f.formula, "G(a -> c)") for f in candidates)
+
+
 def test_candidates_use_only_seed_atoms():
     atoms = {"r", "b"}
     candidates = build_candidates([seed("G(r -> F(b))", list(atoms))])
