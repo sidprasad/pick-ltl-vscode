@@ -11,13 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          # Use Node 20 to satisfy dependencies that require >=20.x
-          node-version: '20.18.1'
+          # Node 22 (current LTS, matches local dev); deps require >=20.x
+          node-version: '22'
 
       - name: Install dependencies
         run: npm ci
@@ -38,10 +38,10 @@ jobs:
         shell: bash -el {0}   # login shell so the micromamba env stays active
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Provision the spot env (conda-forge)
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           environment-name: pick-ltl
           create-args: >-
