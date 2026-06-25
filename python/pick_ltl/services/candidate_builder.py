@@ -54,6 +54,19 @@ def _is_degenerate(formula: str) -> bool:
         return False
 
 
+def _safe_parse(formula: str) -> LTLNode | None:
+    """Parse an LTL string, returning None instead of raising on malformed input.
+
+    Models occasionally emit syntactically invalid LTL. A single bad formula must
+    not abort the whole candidate build, so callers parse through this and skip
+    whatever fails to parse rather than letting LTLParseError propagate.
+    """
+    try:
+        return parse_ltl_string(formula)
+    except Exception:
+        return None
+
+
 def _normalize_formula(formula: str, allowed_atoms: set[str]) -> str | None:
     try:
         normalized = str(parse_ltl_string(formula))
@@ -77,10 +90,18 @@ def _normalize_formula(formula: str, allowed_atoms: set[str]) -> str | None:
 def drop_degenerate_candidate_states(
     candidate_states: list[CandidateFormulaState],
 ) -> list[CandidateFormulaState]:
-    """Remove candidates whose language is empty (unsatisfiable) or universal
-    (tautology). Used at every entry point — freshly built pools *and* imported
-    sessions — so a degenerate formula never enters the distinguishing loop."""
-    return [c for c in candidate_states if not _is_degenerate(c.formula)]
+    """Remove candidates that are unusable for distinguishing: ones that don't
+    parse, or whose language is empty (unsatisfiable) or universal (tautology).
+
+    Used at every entry point — freshly built pools *and* imported sessions — so
+    a malformed or degenerate formula never enters the distinguishing loop (where
+    it would otherwise crash trace generation or survive every classification).
+    """
+    return [
+        c
+        for c in candidate_states
+        if _safe_parse(c.formula) is not None and not _is_degenerate(c.formula)
+    ]
 
 
 def _is_equivalent(formula: str, existing: list[str]) -> bool:
@@ -185,7 +206,19 @@ def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaSta
     candidates: list[CandidateFormulaState] = []
     seen_formulas: list[str] = []
 
+    # Validate every seed once, up front. A malformed formula from the model must
+    # not abort the whole build — swallow the parse error, skip that seed, and
+    # carry on with whatever parsed. The parsed node is reused everywhere below
+    # so nothing downstream re-parses (and re-raises) the raw seed string.
+    parsed_seeds: list[tuple[SeedFormulaResult, LTLNode]] = []
     for seed in seeds:
+        node = _safe_parse(seed.formula)
+        if node is not None:
+            parsed_seeds.append((seed, node))
+    if not parsed_seeds:
+        return []
+
+    for seed, _node in parsed_seeds:
         if seed.formula in seen_formulas or _is_equivalent(seed.formula, seen_formulas):
             continue
         # Drop a seed whose language is empty (unsatisfiable) or universal
@@ -203,8 +236,7 @@ def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaSta
         )
         seen_formulas.append(seed.formula)
 
-    for seed in seeds:
-        node = parse_ltl_string(seed.formula)
+    for seed, node in parsed_seeds:
         semantic_pool: list[dict] = []
 
         with deterministic_random(seed.formula):
@@ -235,9 +267,8 @@ def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaSta
             )
 
     if len(candidates) < 2:
-        for seed in seeds:
-            node = parse_ltl_string(seed.formula)
-            existing_nodes = [parse_ltl_string(candidate.formula) for candidate in candidates]
+        for seed, node in parsed_seeds:
+            existing_nodes = [n for n in (_safe_parse(c.formula) for c in candidates) if n is not None]
             attempts = 0
             while len(candidates) < 2 and attempts < 64:
                 attempts += 1
@@ -249,7 +280,9 @@ def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaSta
                 if not formula or formula in seen_formulas or _is_equivalent(formula, seen_formulas):
                     continue
                 seen_formulas.append(formula)
-                existing_nodes.append(parse_ltl_string(formula))
+                parsed_mutant = _safe_parse(formula)
+                if parsed_mutant is not None:
+                    existing_nodes.append(parsed_mutant)
                 candidates.append(
                     CandidateFormulaState(
                         formula=formula,
@@ -264,17 +297,32 @@ def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaSta
 
 def create_initial_session(prompt: str, provider: dict, seeds: list[SeedFormulaResult]) -> SessionState:
     candidates = build_candidates(seeds)
-    mode = "voting"
-    message = ""
-    if len(candidates) == 1:
-        mode = "single_candidate"
-        message = "We could only get this one."
 
     primary_seed = seeds[0] if seeds else None
     warnings: list[str] = []
     for seed in seeds:
         warnings.extend(seed.warnings)
+
+    # Surface (rather than silently swallow) model formulas that didn't parse, so
+    # the user understands why the pool is smaller than the model's answer count.
+    skipped = [seed.formula for seed in seeds if _safe_parse(seed.formula) is None]
+    if skipped:
+        warnings.append(
+            "Some interpretations from the model were not valid LTL and were skipped."
+        )
     warnings = list(dict.fromkeys(warnings))
+
+    mode = "voting"
+    message = ""
+    if not candidates:
+        mode = "no_result"
+        message = (
+            "None of the model's interpretations were valid, usable LTL. "
+            "Please try generating candidates again."
+        )
+    elif len(candidates) == 1:
+        mode = "single_candidate"
+        message = "We could only get this one."
 
     return SessionState(
         prompt=prompt,

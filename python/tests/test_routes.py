@@ -63,3 +63,35 @@ def test_import_keeps_satisfiable_candidates(client):
     assert resp.status_code == 200
     formulas_out = [c["formula"] for c in resp.get_json()["candidate_states"]]
     assert len(formulas_out) == len(formulas_in)
+
+
+def _seed(formula, atoms):
+    return {
+        "formula": formula,
+        "explanation": "",
+        "atoms": [{"name": a, "meaning": a} for a in atoms],
+    }
+
+
+def test_build_does_not_500_on_malformed_seed(client):
+    # A malformed model formula must not blow up the build route (it used to
+    # surface as an LTLParseError -> HTTP 400). The valid seed still yields a pool.
+    resp = client.post(
+        "/api/candidates/build",
+        json={"prompt": "p", "seeds": [_seed("G(a ->", ["a", "b"]), _seed("G(a -> F(b))", ["a", "b"])]},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["candidate_states"], "expected candidates from the valid seed"
+    assert any("not valid LTL" in w for w in body["warnings"])
+
+
+def test_build_all_malformed_seeds_is_no_result(client):
+    resp = client.post(
+        "/api/candidates/build",
+        json={"prompt": "p", "seeds": [_seed("F(", ["a"])]},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["candidate_states"] == []
+    assert body["mode"] == "no_result"

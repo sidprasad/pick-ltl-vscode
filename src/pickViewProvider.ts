@@ -616,12 +616,28 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      // The model can emit malformed LTL; the backend skips those seeds rather
+      // than failing the build. If nothing usable survived, stop here with a
+      // clear message (and any skip warnings) instead of advancing into an empty
+      // voting loop.
+      const built = this.sessionToCandidates(this.session!);
+      if (built.length === 0) {
+        this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
+        this.sendMessage({
+          type: 'error',
+          message:
+            this.session?.message ||
+            'The model did not return any usable LTL formulas. Please try generating candidates again.'
+        });
+        return;
+      }
+
       this.sendMessage({
         type: 'candidatesGenerated',
-        candidates: this.sessionToCandidates(this.session!)
+        candidates: built
       });
 
-      this.surfaceModelWarnings(warnings);
+      this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
 
       // Check cancellation before generating first pair
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
@@ -1173,13 +1189,25 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      const builtRefined = this.sessionToCandidates(this.session!);
+      if (builtRefined.length === 0) {
+        this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
+        this.sendMessage({
+          type: 'error',
+          message:
+            this.session?.message ||
+            'The model did not return any usable LTL formulas. Please try again.'
+        });
+        return;
+      }
+
       this.sendMessage({
         type: 'candidatesRefined',
-        candidates: this.sessionToCandidates(this.session!),
+        candidates: builtRefined,
         preservedClassifications: sessionData.wordHistory.length
       });
 
-      this.surfaceModelWarnings(warnings);
+      this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
 
       // Check cancellation before generating first pair
       if (this.cancellationTokenSource?.token.isCancellationRequested) {

@@ -11,6 +11,7 @@ from pick_ltl.services.candidate_builder import (
     MUTATION_EXPLANATIONS,
     SYNTACTIC_MUTATION_DEVIATION,
     build_candidates,
+    create_initial_session,
     drop_degenerate_candidate_states,
 )
 from pick_ltl.session.models import AtomSpec, CandidateFormulaState, CandidateOrigin, SeedFormulaResult
@@ -86,12 +87,47 @@ def _cand(formula):
     return CandidateFormulaState(formula=formula, explanation="", origin=CandidateOrigin(kind="seed"))
 
 
-def test_drop_degenerate_candidate_states_filters_unsat_and_tautology():
-    # Mirrors what the import route does: strip empty/universal languages,
-    # keep the real ones.
-    states = [_cand("G(a <-> F(!a))"), _cand("G(a | !a)"), _cand("F(a)"), _cand("G(a -> X(b))")]
+def test_drop_degenerate_candidate_states_filters_unparseable_unsat_and_tautology():
+    # Mirrors what the import route does: strip formulas that don't parse, plus
+    # empty/universal languages; keep the real ones.
+    states = [
+        _cand("G(a -> "),           # malformed
+        _cand("G(a <-> F(!a))"),    # unsatisfiable
+        _cand("G(a | !a)"),         # tautology
+        _cand("F(a)"),
+        _cand("G(a -> X(b))"),
+    ]
     kept = [c.formula for c in drop_degenerate_candidate_states(states)]
     assert kept == ["F(a)", "G(a -> X(b))"]
+
+
+def test_malformed_seed_does_not_abort_build():
+    # A single malformed formula from the model must not crash the build; the
+    # valid seed still yields a usable pool.
+    candidates = build_candidates([seed("G(a ->", ["a", "b"]), seed("G(a -> F(b))", ["a", "b"])])
+    formulas = [c.formula for c in candidates]
+    assert formulas, "valid seed should still produce candidates"
+    assert any(LTLNode.equiv(f, "G(a -> F(b))") for f in formulas)
+    assert all("G(a ->" != f for f in formulas), "malformed seed must not enter the pool"
+
+
+def test_all_malformed_seeds_yields_empty_pool_without_raising():
+    assert build_candidates([seed("F(", ["a"]), seed("a & & b", ["a", "b"])]) == []
+
+
+def test_create_initial_session_flags_skipped_malformed_seeds():
+    session = create_initial_session(
+        "p", {}, [seed("G(a ->", ["a", "b"]), seed("G(a -> F(b))", ["a", "b"])]
+    )
+    assert session.candidate_states, "valid seed should survive"
+    assert any("not valid LTL" in w for w in session.warnings)
+
+
+def test_create_initial_session_all_malformed_is_no_result():
+    session = create_initial_session("p", {}, [seed("F(", ["a"])])
+    assert session.candidate_states == []
+    assert session.mode == "no_result"
+    assert session.message
 
 
 def test_no_candidate_is_degenerate():
