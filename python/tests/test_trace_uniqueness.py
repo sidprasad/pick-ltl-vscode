@@ -63,6 +63,10 @@ CASES = [
     ("F(g)", [seed("F(g)", ["g"]), seed("G(g)", ["g"])]),
     ("X(p)", [seed("X(p)", ["p"]), seed("F(p)", ["p"]), seed("G(p)", ["p"])]),
     ("G(a -> X(b))", [seed("G(a -> X(b))", ["a", "b"])]),
+    # Strict alternation: period-2 cyclic witnesses. Regression for the lasso
+    # period bug — distinguishing traces here must survive a round-trip through
+    # expandSpotTrace, or the loop exhausts before it can converge.
+    ("G(a <-> X(!a))", [seed("G(a <-> X(!a))", ["a"]), seed("F(a <-> X(!a))", ["a"])]),
 ]
 
 
