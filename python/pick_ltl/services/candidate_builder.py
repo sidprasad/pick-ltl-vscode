@@ -47,10 +47,27 @@ def _normalize_formula(formula: str, allowed_atoms: set[str]) -> str | None:
 
 
 def _is_equivalent(formula: str, existing: list[str]) -> bool:
-    return any(LTLNode.equiv(formula, other) for other in existing)
+    for other in existing:
+        try:
+            if LTLNode.equiv(formula, other):
+                return True
+        except Exception:
+            # If SPOT cannot decide equivalence for this pair, keep both rather
+            # than crash the whole candidate build. A spurious near-duplicate is
+            # far less harmful than losing the entire pool.
+            continue
+    return False
 
 
 def _count_distinguishing_witnesses(formula1: str, formula2: str, limit: int = DEFAULT_ELIMINATION_THRESHOLD) -> int:
+    """Count DISTINCT traces that distinguish the two formulas, up to `limit`.
+
+    Only counts a witness when SPOT confirms it separates them (`match1 !=
+    match2`), so it never *over*-counts — the result is a lower bound on the true
+    number of distinguishing words. That direction is the safe one: the
+    elimination threshold derived from it is never set higher than the formulas
+    can actually witness.
+    """
     excluded: list[str] = []
     distinguishing: list[str] = []
 
@@ -82,22 +99,33 @@ def _count_distinguishing_witnesses(formula1: str, formula2: str, limit: int = D
 
 
 def _assign_dynamic_thresholds(candidates: list[CandidateFormulaState], default_threshold: int = DEFAULT_ELIMINATION_THRESHOLD) -> None:
+    """Set the elimination threshold to the **minimum number of distinguishing
+    words between any two candidates** (capped at `default_threshold`, floored
+    at 1), shared by all candidates.
+
+    A candidate is eliminated after this many contradicting classifications.
+    Requiring more contradictions tolerates more user mislabels, but we can never
+    require more than the *closest* pair of candidates can actually witness —
+    otherwise that pair could never be resolved and the loop would stall. So the
+    threshold is the smallest pairwise distinguishing-word count (each counted up
+    to the cap). Equivalent pairs (count 0) cannot occur after dedup and are
+    ignored defensively. Mirrors pick-regex.
+    """
+    for candidate in candidates:
+        candidate.elimination_threshold = default_threshold
     if len(candidates) < 2:
-        for candidate in candidates:
-            candidate.elimination_threshold = default_threshold
         return
 
-    min_thresholds = {candidate.formula: default_threshold for candidate in candidates}
-
+    threshold = default_threshold
     for index, candidate in enumerate(candidates):
         for other in candidates[index + 1:]:
-            witness_count = _count_distinguishing_witnesses(candidate.formula, other.formula, limit=default_threshold)
-            if witness_count == 1:
-                min_thresholds[candidate.formula] = min(min_thresholds[candidate.formula], 1)
-                min_thresholds[other.formula] = min(min_thresholds[other.formula], 1)
+            count = _count_distinguishing_witnesses(candidate.formula, other.formula, limit=default_threshold)
+            if count >= 1:
+                threshold = min(threshold, count)
 
+    threshold = max(1, threshold)
     for candidate in candidates:
-        candidate.elimination_threshold = max(1, min_thresholds.get(candidate.formula, default_threshold))
+        candidate.elimination_threshold = threshold
 
 
 def _merge_atoms(seeds: list[SeedFormulaResult]) -> list:

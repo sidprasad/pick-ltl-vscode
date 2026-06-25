@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from .. import flask_compat  # noqa: F401
-
 from typing import Any
 
 from flask import jsonify, request
@@ -24,13 +22,3 @@ def json_error(message: str, status_code: int = 400, **extra: Any):
     payload = {"error": message}
     payload.update(extra)
     return jsonify(payload), status_code
-
-
-def normalize_provider_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "kind": str(payload.get("kind", "ollama")).strip() or "ollama",
-        "base_url": str(payload.get("base_url", "")).strip(),
-        "model": str(payload.get("model", "")).strip(),
-        "api_key": str(payload.get("api_key", "")).strip(),
-        "timeout_seconds": int(payload.get("timeout_seconds", 60) or 60),
-    }

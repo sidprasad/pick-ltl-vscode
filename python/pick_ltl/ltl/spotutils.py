@@ -104,22 +104,24 @@ def generate_trace_excluding(formula, excluded_traces=[]):
             # Complement it (now accepts everything EXCEPT this trace)
             not_trace_aut = spot.complement(trace_aut)
             exclusion_automata.append(not_trace_aut)
-        except Exception as e:
-            print(f"Warning: Could not process excluded trace '{trace_str}': {e}")
+        except Exception:
+            # An excluded trace we cannot parse just isn't enforced as an
+            # exclusion; skip it rather than logging on every call.
             continue
-    
+
     # Step 3: Create the final automaton by taking product
     final_aut = phi
-    
+
     # Product with each exclusion automaton
     for excl_aut in exclusion_automata:
         final_aut = spot.product(final_aut, excl_aut)
-        
-        # Check if the automaton is empty (no valid traces exist)
+
+        # No trace satisfies the formula while avoiding all excluded traces.
+        # This is expected once exclusions exhaust the language; the caller
+        # handles None, so we stay quiet instead of printing on the hot path.
         if final_aut.is_empty():
-            print("No valid traces exist that satisfy formula and avoid all excluded traces")
             return None
-    
+
 
     try:
         run = final_aut.accepting_run()
@@ -128,9 +130,9 @@ def generate_trace_excluding(formula, excluded_traces=[]):
             # Double-check it's not in excluded list (safety check)
             if trace not in excluded_traces:
                 return trace
-    except Exception as e:
-        print(f"Error generating trace: {e}")
-    
+    except Exception:
+        return None
+
     return None
 
 
@@ -307,10 +309,11 @@ def generate_two_distinguishing_words(candidates_in_play, excluded_words=None):
        - Apply single-formula logic to ensure two non-empty traces are always returned
        - This eliminates ValueError exceptions in favor of guaranteed results
 
-    Contract (strict):
+    Contract:
       - If candidates_in_play is empty -> raise ValueError("No Candidates in Play")
-      - ALWAYS returns exactly TWO non-empty trace strings (may be duplicates)
-      - Never returns empty strings, None, or partial results
+      - Returns ONE or TWO *distinct* non-empty trace strings. It never clones a
+        single trace to pad the result to two (that produced trace1 == trace2).
+      - Raises ValueError only when it cannot produce even one trace.
       - Respects excluded_words (avoids returning previously seen traces)
       - Traces are expanded via expandSpotTrace when possible
 
@@ -430,14 +433,15 @@ def generate_two_distinguishing_words(candidates_in_play, excluded_words=None):
             if s not in results:
                 results.append(s)
 
-        # If still short, but we have a single valid trace, duplicate it (per earlier policy)
-        if len(results) == 1:
-            results.append(results[0])
-
-        # Final check: must have two non-empty traces
-        if len(results) < 2 or not results[0] or not results[1]:
-            raise ValueError("Could not produce two distinguishing words")
-        return results[:2]
+        # Return the distinct, non-empty traces we found. Never duplicate a
+        # trace to pad to two — that produced identical (trace1 == trace2) pairs.
+        distinct = []
+        for w in results:
+            if w and w not in distinct:
+                distinct.append(w)
+        if not distinct:
+            raise ValueError("Could not produce a distinguishing word")
+        return distinct[:2]
 
     # Multi-formula path: try pairwise helpers, partials, Δ, synthesis
     partials = []
@@ -574,15 +578,102 @@ def generate_two_distinguishing_words(candidates_in_play, excluded_words=None):
         if s not in results:
             results.append(s)
 
-    # If still short, but we have a single valid trace, duplicate it
-    if len(results) == 1:
-        results.append(results[0])
+    # Return the distinct, non-empty traces we found. Never duplicate a trace to
+    # pad to two — that produced identical (trace1 == trace2) pairs.
+    distinct = []
+    for w in results:
+        if w and w not in distinct:
+            distinct.append(w)
+    if not distinct:
+        raise ValueError("Could not produce a distinguishing word")
+    return distinct[:2]
 
-    # Final check: must have two non-empty traces (should always succeed with fallback)
-    if len(results) < 2 or not results[0] or not results[1]:
-        raise ValueError("Could not produce two distinguishing words")
-    
-    return results[:2]
+
+def generate_distinguishing_trace_pool(formulas, excluded=None, target=12):
+    """Produce a pool of DISTINCT, non-empty, expanded trace strings drawn from
+    several distinguishing strategies, so a caller can pick the most informative
+    pair (rather than blindly taking the first two words).
+
+    Unlike generate_two_distinguishing_words this never duplicates a trace and
+    makes no guarantee about count — it returns as many distinct traces as it
+    can find (0..target). Sources, in order: pairwise distinguishing words,
+    symmetric-difference traces, then per-formula accepted/rejected traces.
+    """
+    _require_spot()
+
+    if excluded is None:
+        excluded = []
+    seen = set(excluded)
+    pool: list[str] = []
+
+    def add(word):
+        if word and word not in seen:
+            seen.add(word)
+            pool.append(word)
+
+    formulas = list(formulas)
+    n = len(formulas)
+
+    for i, j in combinations(range(n), 2):
+        if len(pool) >= target:
+            break
+        f1, f2 = formulas[i], formulas[j]
+        try:
+            w_ij, w_ji = generate_distinguishing_words(f1, f2, exclude=list(seen))
+        except Exception:
+            w_ij, w_ji = "", ""
+        add(w_ij)
+        add(w_ji)
+        try:
+            w_delta = generate_trace_in_symmetric_difference(f1, f2, excluded_traces=list(seen))
+        except Exception:
+            w_delta = None
+        add(w_delta)
+
+    for f in formulas:
+        if len(pool) >= target:
+            break
+        try:
+            add(generate_accepted_trace(f, excluded_traces=list(seen)))
+        except Exception:
+            pass
+        try:
+            neg_formula = spot.formula.Not(spot.formula(f))
+            run_not = generate_trace_excluding(neg_formula, excluded_traces=list(seen))
+            if run_not:
+                try:
+                    literals = set(getFormulaLiterals(f))
+                except Exception:
+                    literals = set()
+                try:
+                    add(expandSpotTrace(run_not, literals))
+                except Exception:
+                    add(run_not)
+        except Exception:
+            pass
+
+    # A trace accepted by NONE of the candidates (rejected by all). This is the
+    # clean "obviously-out" example used to partner a lone discriminating trace
+    # when the candidates form a subsumption chain (only one informative split).
+    if n >= 1:
+        try:
+            neg_all = spot.formula.And([spot.formula.Not(spot.formula(f)) for f in formulas])
+            run = generate_trace_excluding(neg_all, excluded_traces=list(seen))
+            if run:
+                literals = set()
+                for f in formulas:
+                    try:
+                        literals |= set(getFormulaLiterals(f))
+                    except Exception:
+                        continue
+                try:
+                    add(expandSpotTrace(run, literals))
+                except Exception:
+                    add(run)
+        except Exception:
+            pass
+
+    return pool
 
 
 def generate_accepting_words(automaton, max_runs=5):

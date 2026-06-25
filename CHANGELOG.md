@@ -2,6 +2,44 @@
 
 All notable changes to the **PICK — LTL Builder** extension are documented here.
 
+## [Unreleased]
+
+### Backend is now standalone and minimal
+- The Python backend under `python/pick_ltl` is now **owned by this repo** (no
+  longer mirrored from another project) and trimmed to exactly what the sidecar
+  uses. Removed ~2,400 lines of unreachable code: the Python LLM provider stack
+  (`llm/`), Python seed generation, provider settings/config, the standalone
+  Flask web UI (`templates/`, `static/`), dead `ltl_formula.py`, and the unused
+  routes. The sidecar probe is now `GET /api/health`. Retired
+  `util/sync-backend.sh`.
+
+### Candidates
+- Seed the backend with **all** of the model's candidate interpretations
+  (previously capped at the top 2 by confidence). The backend already
+  deduplicates seeds semantically (SPOT equivalence), so more seeds only enrich
+  the pool. Hardened that dedup so an undecidable equivalence check can no longer
+  crash the whole build.
+
+### Distinguishing traces — no more repeated/duplicate/useless instances
+- `next_pair` is now partition-aware. Every emitted pair has two **distinct**
+  traces with two distinct acceptance signatures, so a pair never shows the same
+  trace twice and is always genuinely distinguishing. It prefers
+  not-yet-asked partitions and never pads a pair by cloning a trace (which used
+  to yield `trace1 == trace2`).
+- When the candidates form a subsumption chain (only one informative split), the
+  lone discriminating trace is shown alongside a trace **accepted by none** of
+  the candidates (a clean negative example) instead of a redundant one.
+- A sole surviving candidate is now finalized as the result (it is the one
+  consistent with every answer), rather than stalling when it never landed on
+  the accept side of a shown trace.
+- **Traces are never requested from the LLM.** The model is asked only for
+  candidate formulas; all traces are generated formally by SPOT.
+
+### Tests
+- Added a `python/tests` pytest suite covering semantic candidate deduplication
+  and trace uniqueness/distinguishing/convergence, wired into CI via a
+  micromamba + SPOT job. Tests `skip` when SPOT is unavailable.
+
 ## [0.3.0] — 2026-06-24
 
 - Backend setup now works with **nothing preinstalled**. When no

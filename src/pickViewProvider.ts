@@ -11,34 +11,20 @@ import { PythonSidecar, SidecarError } from './sidecar';
 import { traceToRenderData } from './traceRender';
 
 /**
- * Select the top N candidates by confidence score.
- * Candidates without confidence scores are treated as having confidence 0 (lowest priority).
+ * Order the model's interpretations by confidence (highest first) so the
+ * highest-confidence one becomes the primary seed. We deliberately keep *all*
+ * of them: the Python backend deduplicates seeds semantically (SPOT
+ * equivalence), so feeding every distinct interpretation only enriches the
+ * candidate pool — it never produces duplicates. (Previously this truncated to
+ * the top 2, discarding interpretations the model was explicitly asked for.)
  */
-export function selectTopCandidatesByConfidence(
-  candidates: LtlCandidate[],
-  maxCandidates: number
-): LtlCandidate[] {
-  if (candidates.length <= maxCandidates) {
-    return candidates;
-  }
-
-  // Sort by confidence (descending), treating undefined as 0
-  const sorted = [...candidates].sort((a, b) => {
-    const confA = a.confidence ?? 0;
-    const confB = b.confidence ?? 0;
-    return confB - confA;
-  });
-
-  const selected = sorted.slice(0, maxCandidates);
-  
-  if (selected.length < candidates.length) {
-    logger.info(
-      `Selected top ${selected.length} candidates by confidence from ${candidates.length} valid candidates. ` +
-      `Confidence range: ${selected.map(c => c.confidence ?? 0).join(', ')}`
-    );
-  }
-
-  return selected;
+export function orderCandidatesByConfidence(candidates: LtlCandidate[]): LtlCandidate[] {
+  const sorted = [...candidates].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
+  logger.info(
+    `Seeding backend with all ${sorted.length} model interpretation(s) ` +
+    `(confidence: ${sorted.map(c => c.confidence ?? 0).join(', ')}); backend dedupes equivalents.`
+  );
+  return sorted;
 }
 
 export class PickViewProvider implements vscode.WebviewViewProvider {
@@ -607,7 +593,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       // Hand the top LLM interpretations to the backend as PICK seeds; it expands
       // each via misconception + syntactic mutation and uses SPOT to generate
       // distinguishing traces and set per-candidate elimination thresholds.
-      const seeds = selectTopCandidatesByConfidence(candidates, 2).map(candidate => ({
+      const seeds = orderCandidatesByConfidence(candidates).map(candidate => ({
         formula: candidate.formula,
         explanation: candidate.explanation ?? '',
         atoms: this.toSeedAtoms(atoms),
@@ -1161,7 +1147,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         .filter(r => r.classification === WordClassification.REJECT)
         .map(r => r.word);
 
-      const seeds = selectTopCandidatesByConfidence(candidates, 2).map(candidate => ({
+      const seeds = orderCandidatesByConfidence(candidates).map(candidate => ({
         formula: candidate.formula,
         explanation: candidate.explanation ?? '',
         atoms: this.toSeedAtoms(atoms),

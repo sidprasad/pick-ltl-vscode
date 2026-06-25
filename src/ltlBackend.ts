@@ -19,11 +19,6 @@ export interface SeedFormulaResult {
   warnings: string[];
 }
 
-/** Response shape of POST /api/seed/generate (primary seed + all seeds). */
-export interface SeedGenerationResult extends SeedFormulaResult {
-  seeds: SeedFormulaResult[];
-}
-
 export interface CandidateOrigin {
   /** "seed" | "semantic_mutation" | "syntactic_mutation" | ... */
   kind: string;
@@ -90,14 +85,6 @@ export interface SessionState {
   final_result: FinalResult | null;
   exhausted: boolean;
   message: string;
-}
-
-export interface ProviderConfig {
-  kind: string;
-  base_url: string;
-  model: string;
-  api_key?: string;
-  timeout_seconds?: number;
 }
 
 /** Thrown when the sidecar is not reachable (not started / crashed / wrong URL). */
@@ -172,18 +159,14 @@ export class LtlBackend {
     return data as T;
   }
 
-  /** Fast readiness probe: GET /api/settings returns JSON and needs no spot. */
+  /** Fast readiness probe: GET /api/health returns JSON and needs no spot. */
   async ping(timeoutMs = 1500): Promise<boolean> {
     try {
-      await this.request('/api/settings', undefined, 'GET', timeoutMs);
+      await this.request('/api/health', undefined, 'GET', timeoutMs);
       return true;
     } catch {
       return false;
     }
-  }
-
-  generateSeed(prompt: string, provider?: ProviderConfig): Promise<SeedGenerationResult> {
-    return this.request('/api/seed/generate', { prompt, provider });
   }
 
   /**
@@ -193,10 +176,8 @@ export class LtlBackend {
    */
   buildCandidates(args: {
     prompt: string;
-    provider?: ProviderConfig;
     seeds?: SeedFormulaResult[];
     seed?: SeedFormulaResult;
-    regenerate_seed?: boolean;
   }): Promise<SessionState> {
     return this.request('/api/candidates/build', args);
   }
@@ -222,10 +203,6 @@ export class LtlBackend {
     });
   }
 
-  refine(session: SessionState, prompt: string): Promise<SessionState> {
-    return this.request('/api/session/refine', { session, prompt });
-  }
-
   addExamples(session: SessionState, acceptTraces: string[], rejectTraces: string[]): Promise<SessionState> {
     return this.request('/api/session/examples', {
       session,
@@ -240,18 +217,5 @@ export class LtlBackend {
 
   importSession(session: SessionState): Promise<SessionState> {
     return this.request('/api/session/import', { session });
-  }
-
-  async listModels(provider?: ProviderConfig): Promise<string[]> {
-    const r = await this.request<{ models: string[] }>(
-      '/api/models',
-      provider,
-      provider ? 'POST' : 'GET'
-    );
-    return r.models ?? [];
-  }
-
-  testConnection(provider: ProviderConfig): Promise<unknown> {
-    return this.request('/api/settings/test', provider);
   }
 }

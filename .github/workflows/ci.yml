@@ -30,3 +30,34 @@ jobs:
 
       - name: Run tests
         run: xvfb-run -a npm test
+
+  python-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}   # login shell so the micromamba env stays active
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Provision the spot env (conda-forge)
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: pick-ltl
+          create-args: >-
+            python=3.12
+            spot
+            pytest
+            hypothesis
+          condarc: |
+            channels:
+              - conda-forge
+
+      - name: Install Python backend deps
+        run: pip install -r python/requirements.txt
+
+      - name: Preflight (spot + flask + antlr4 import)
+        run: PYTHONPATH=python python python/preflight.py
+
+      - name: Run backend tests
+        run: python -m pytest python/tests -q

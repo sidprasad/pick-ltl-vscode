@@ -2,8 +2,7 @@
 
 Prints a single JSON line describing whether the interpreter can run the
 backend. Always exits 0 — the caller (src/sidecar.ts) inspects the JSON so it
-can give a precise "what's missing" message. This file is owned by the
-extension (not vendored from pick-ltl), so re-vendoring will not clobber it.
+can give a precise "what's missing" message.
 """
 
 import json
@@ -24,9 +23,8 @@ def main():
         "spot": _importable("spot"),
         "flask": _importable("flask"),
         "antlr4": _importable("antlr4"),
-        "requests": _importable("requests"),
     }
-    info["ok"] = bool(info["spot"] and info["flask"] and info["antlr4"] and info["requests"])
+    info["ok"] = bool(info["spot"] and info["flask"] and info["antlr4"])
     sys.stdout.write(json.dumps(info))
     sys.stdout.write("\n")
 

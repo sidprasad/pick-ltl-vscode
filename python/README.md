@@ -12,18 +12,43 @@ The extension spawns it (`flask --app pick_ltl.app run`) on a random localhost
 port and talks to its `/api/*` endpoints. The server is stateless — the
 extension passes the session JSON in each request.
 
-## Provenance
+The seed formulas come from the extension's own language model integration
+(VS Code's `vscode.lm` / Copilot), which POSTs them to `/api/candidates/build`.
+The backend does **no** LLM work itself: it only expands seeds, deduplicates,
+generates distinguishing traces, and runs the voting loop.
 
-`pick_ltl/` is **vendored** from the standalone
-[`pick-ltl`](https://github.com/sidprasad/pick-ltl) project so the `.vsix` is
-self-contained. Re-sync it after upstream changes:
+## Scope & provenance
+
+This directory is the **canonical, self-contained** PICK engine for the
+extension — it is no longer a mirror synced from another repo. It contains only
+what the sidecar needs: candidate building + misconception/syntactic mutation
+(`pick_ltl/mutation/`), SPOT trace generation/equivalence
+(`pick_ltl/ltl/spotutils.py`), the LTL parser/printer/English renderer
+(`pick_ltl/ltl/`), and the session engine + HTTP routes
+(`pick_ltl/session/`, `pick_ltl/api/`). The standalone Flask web UI and the
+Python LLM providers were removed because the extension drives those concerns.
+
+## Endpoints
+
+`GET /api/health` (liveness), and stateless `POST` engine endpoints:
+`/api/candidates/build`, `/api/session/next-pair`, `/api/session/classify`,
+`/api/session/reclassify`, `/api/session/examples`, `/api/session/finalize`,
+`/api/session/import`.
+
+## Tests
 
 ```bash
-./util/sync-backend.sh                 # defaults to ../pick-ltl/src/pick_ltl
-./util/sync-backend.sh /path/to/pick_ltl
+PYTHONPATH=python python -m pytest python/tests -q   # requires spot (+ hypothesis for PBT)
 ```
 
-`preflight.py` is owned by the extension and is **not** overwritten by the sync.
+The suite covers semantic candidate deduplication, trace uniqueness (no
+duplicate or non-distinguishing trace pairs), and the dynamic elimination
+threshold. It also includes **property-based tests** (Hypothesis) that generate
+random LTL formulas and assert the engine invariants for every input: every
+shown pair is distinct and distinguishing, no trace repeats, the loop always
+terminates, and a candidate equivalent to the (consistent) ground truth is never
+eliminated nor mis-converged away from. Tests `skip` automatically when `spot`
+(or, for the PBT, `hypothesis`) is not importable.
 
 ## One-time environment setup
 
@@ -51,5 +76,5 @@ absolute path, then run **PICK LTL: Set Up / Restart Backend**.
 
 ```bash
 PYTHONPATH=python python python/preflight.py
-# {"python": "3.12.x", "spot": true, "flask": true, "antlr4": true, "requests": true, "ok": true}
+# {"python": "3.12.x", "spot": true, "flask": true, "antlr4": true, "ok": true}
 ```
