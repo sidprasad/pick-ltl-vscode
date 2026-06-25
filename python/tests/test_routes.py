@@ -95,3 +95,32 @@ def test_build_all_malformed_seeds_is_no_result(client):
     body = resp.get_json()
     assert body["candidate_states"] == []
     assert body["mode"] == "no_result"
+
+
+def _voting_session():
+    return _session_with(["G(a -> F(b))"])
+
+
+def test_classify_invalid_classification_is_400_not_500(client):
+    # A bad classification value is client error, not a server crash. It used to
+    # raise an uncaught ValueError -> HTTP 500 with a traceback.
+    resp = client.post(
+        "/api/session/classify",
+        json={"session": _voting_session(), "trace": "a;cycle{a}", "classification": "banana"},
+    )
+    assert resp.status_code == 400
+    assert "classification" in resp.get_json()["error"].lower()
+
+
+def test_reclassify_out_of_range_index_is_400_not_500(client):
+    resp = client.post(
+        "/api/session/reclassify",
+        json={"session": _voting_session(), "history_index": 99, "classification": "accept"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]
+
+
+def test_unknown_route_stays_404(client):
+    # The catch-all error handler must not turn HTTP errors into 500s.
+    assert client.get("/api/does-not-exist").status_code == 404

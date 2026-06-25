@@ -108,6 +108,14 @@ def handle_ltl_parse_error(error: LTLParseError):
     return json_error(str(error), status_code=400)
 
 
+@bp.errorhandler(ValueError)
+def handle_value_error(error: ValueError):
+    # The engine raises ValueError for bad client input (e.g. an unknown
+    # classification or an out-of-range history index). That's a 400, not an
+    # uncaught 500 with a traceback — which is what it used to surface as.
+    return json_error(str(error), status_code=400)
+
+
 @bp.errorhandler(RuntimeError)
 def handle_runtime_error(error: RuntimeError):
     return json_error(str(error), status_code=500)
