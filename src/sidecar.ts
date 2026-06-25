@@ -47,7 +47,6 @@ interface PreflightInfo {
   spot: boolean;
   flask: boolean;
   antlr4: boolean;
-  requests: boolean;
   ok: boolean;
 }
 
@@ -307,9 +306,6 @@ export class PythonSidecar {
       if (!info.antlr4) {
         missing.push('antlr4-python3-runtime');
       }
-      if (!info.requests) {
-        missing.push('requests');
-      }
       if (!info.spot) {
         missing.push('spot (conda install -c conda-forge spot)');
       }
@@ -384,7 +380,7 @@ export class PythonSidecar {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 1500);
-        const resp = await fetch(`${baseUrl}/api/settings`, { signal: controller.signal });
+        const resp = await fetch(`${baseUrl}/api/health`, { signal: controller.signal });
         clearTimeout(timer);
         if (resp.ok) {
           return;

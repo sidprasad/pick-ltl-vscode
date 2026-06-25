@@ -8,10 +8,11 @@ util/**
 AGENTS.md
 vsc-extension-quickstart.md
 
-# Python backend is vendored and SHIPS in the .vsix (python/**), but never its
-# caches or the standalone test artifacts.
+# The Python backend SHIPS in the .vsix (python/**), but never its caches or the
+# test suite (dev-only; needs spot + pytest).
 python/**/__pycache__/**
 python/**/*.pyc
+python/tests/**
 **/.pytest_cache/**
 **/tsconfig.json
 **/eslint.config.mjs

@@ -8,7 +8,7 @@
  * src/sidecar.ts (PythonSidecar.provisionEnvironment + start):
  *
  *   download micromamba -> create env (spot from conda-forge) -> pip install
- *   -> preflight (import spot + deps) -> boot Flask -> GET /api/settings
+ *   -> preflight (import spot + deps) -> boot Flask -> GET /api/health
  *
  * Usage:
  *   npm run compile                       # produces out/micromamba.js
@@ -81,7 +81,7 @@ const run = (file, args, env) => {
     PYTHONPATH: pythonDir
   });
 
-  // 5) Boot Flask and probe /api/settings (mirrors PythonSidecar.start/waitForReady).
+  // 5) Boot Flask and probe /api/health (mirrors PythonSidecar.start/waitForReady).
   const port = await freePort();
   console.log(`\nBooting backend on 127.0.0.1:${port} …`);
   const proc = cp.spawn(
@@ -98,7 +98,7 @@ const run = (file, args, env) => {
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline && proc.exitCode === null) {
     try {
-      const resp = await fetch(`http://127.0.0.1:${port}/api/settings`);
+      const resp = await fetch(`http://127.0.0.1:${port}/api/health`);
       if (resp.ok) {
         ok = true;
         break;
@@ -111,9 +111,9 @@ const run = (file, args, env) => {
   proc.kill('SIGTERM');
 
   if (!ok) {
-    throw new Error('backend did not answer GET /api/settings within 30s');
+    throw new Error('backend did not answer GET /api/health within 30s');
   }
-  console.log('\nPASS: micromamba bootstrap → spot env → Flask /api/settings all OK.');
+  console.log('\nPASS: micromamba bootstrap → spot env → Flask /api/health all OK.');
 
   if (keep || dirArg) {
     console.log(`Left prefix in place: ${dir}`);

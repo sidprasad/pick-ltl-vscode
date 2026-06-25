@@ -72,9 +72,7 @@ Candidate count and elimination thresholds are determined by the backend (miscon
 
 The extension bundles **no LTL engine**: all formal analysis runs in the Python backend (SPOT). Trace SVGs are produced by a small committed renderer ([`media/vendor/tracerenderer.js`](media/vendor/tracerenderer.js)) fed render data parsed from SPOT's lasso strings by [`src/traceRender.ts`](src/traceRender.ts).
 
-The Python backend is **vendored** under [`python/pick_ltl`](python/pick_ltl) from the standalone [`pick-ltl`](https://github.com/sidprasad/pick-ltl) project so the `.vsix` is self-contained. Re-sync it after upstream changes with `./util/sync-backend.sh` (details in [`python/README.md`](python/README.md)); `python/preflight.py` is extension-owned and is never overwritten by the sync.
-
-> The engine repo is public, so `npm install` clones it with no credentials required.
+The Python backend under [`python/pick_ltl`](python/pick_ltl) is **self-contained and owned by this repo** — it is the canonical PICK engine, not a mirror of another project, and it ships inside the `.vsix`. It is trimmed to exactly what the sidecar needs (candidate building, misconception/syntactic mutation, SPOT trace generation/equivalence, and the session engine); the seeds come from the extension's `vscode.lm` integration, so the backend does no LLM work itself. See [`python/README.md`](python/README.md) for the API surface and tests.
 
 ```bash
 npm install        # pulls @sidprasad/ltl-ts from GitHub

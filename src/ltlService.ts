@@ -10,7 +10,6 @@ export interface LtlCandidate {
   formula: string;
   explanation: string;
   confidence?: number;
-  exampleTraces?: string[];
 }
 
 export interface LtlGenerationResult {
@@ -127,17 +126,6 @@ export async function getAvailableFamilies(vendor?: string): Promise<string[]> {
   return Array.from(families).sort();
 }
 
-function sanitizeExampleTraces(rawTraces: unknown): string[] {
-  if (!Array.isArray(rawTraces)) {
-    return [];
-  }
-  const normalized = rawTraces
-    .filter(candidate => typeof candidate === 'string')
-    .map(candidate => candidate.trim())
-    .filter(candidate => candidate.length > 0);
-  return Array.from(new Set(normalized)).slice(0, 4);
-}
-
 function sanitizeAtoms(rawAtoms: unknown): LtlAtom[] {
   if (!Array.isArray(rawAtoms)) {
     return [];
@@ -214,8 +202,7 @@ export async function generateLtlFromDescription(
       "{",
       "  \"atoms\": [ {\"name\": \"<atom>\", \"meaning\": \"<english meaning>\"} ],",
       "  \"candidates\": [",
-      "    {\"formula\": \"<LTL>\", \"explanation\": \"<why this interpretation>\", \"confidence\": 0.0,",
-      "     \"exampleTraces\": [\"a&b;cycle{!a}\"]}",
+      "    {\"formula\": \"<LTL>\", \"explanation\": \"<why this interpretation>\", \"confidence\": 0.0}",
       "  ],",
       "  // warnings: [\"<caution>\"]   // optional",
       "}",
@@ -230,7 +217,7 @@ export async function generateLtlFromDescription(
       "- Output must be valid JSON. No backticks, comments, or extra prose.",
       "- \"candidates\" must contain 3–5 items, diverse in meaning (e.g. safety vs liveness, scope of G/F, strict vs non-strict).",
       "- Each candidate: formula (LTL string using only the allowed syntax), explanation, confidence in [0,1].",
-      "- When helpful, add 2–4 short exampleTraces per candidate in Spot lasso format: 'prefix;cycle{...}', states separated by ';', literals joined by '&', '!' for negation, '1' for the all-true state. Example: 'a&!b;cycle{a&b}'.",
+      "- Do NOT include example traces or any trace data — traces are generated formally by the engine, never by you.",
       "- Add warnings (max 2–3, short) if the description is not expressible in LTL (e.g. counting, real-time bounds, data values).",
       "",
       `Description: ${description}`,
@@ -338,11 +325,7 @@ export async function generateLtlFromDescription(
     .map((c: any) => ({
       formula: c.formula.trim(),
       explanation: typeof c.explanation === 'string' ? c.explanation : '',
-      confidence: typeof c.confidence === 'number' ? c.confidence : undefined,
-      exampleTraces: (() => {
-        const t = sanitizeExampleTraces(c.exampleTraces);
-        return t.length > 0 ? t : undefined;
-      })()
+      confidence: typeof c.confidence === 'number' ? c.confidence : undefined
     }));
 
   // Parse-validation is delegated to the Python backend (ANTLR), which rejects
