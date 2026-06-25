@@ -27,12 +27,12 @@ jobs:
       OVSX_PAT: ${{ secrets.OVSX_PAT }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '20.18.1'
+          node-version: '22'
           cache: npm
 
       - name: Install dependencies
@@ -47,14 +47,14 @@ jobs:
         run: npm run package:vsix
 
       - name: Upload VSIX as a workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pick-ltl-vsix
           path: '*.vsix'
 
       - name: Create GitHub Release with the VSIX
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: '*.vsix'
           generate_release_notes: true
