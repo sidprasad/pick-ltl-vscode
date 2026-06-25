@@ -196,9 +196,13 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
     }
 
     if (session.exhausted) {
+      // Send ALL candidates (not just survivors) so the eliminated ones — which
+      // carry every downvote the answers produced — stay visible. Filtering to
+      // survivors here erased the record of progress: with every survivor at
+      // zero negative votes, an exhausted session looked like nothing happened.
       this.sendMessage({
         type: 'insufficientWords',
-        candidates: status.candidateDetails.filter(c => !c.eliminated),
+        candidates: status.candidateDetails,
         status,
         message: session.message || 'Unable to generate more distinguishing traces.'
       });

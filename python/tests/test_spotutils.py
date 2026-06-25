@@ -6,10 +6,14 @@ pytest.importorskip("spot")
 
 from pick_ltl.ltl.spotutils import (
     areEquivalent,
+    generate_accepted_trace,
     generate_distinguishing_trace_pool,
     generate_two_distinguishing_words,
+    is_degenerate,
     is_trace_satisfied,
+    is_trivial,
 )
+from pick_ltl.ltl.traceprocessor import expandSpotTrace
 
 
 def test_are_equivalent_recognizes_equivalent_formulas():
@@ -58,3 +62,64 @@ def test_distinguishing_words_actually_distinguish():
         is_trace_satisfied(w, "F(a)") != is_trace_satisfied(w, "G(a)") for w in words
     )
     assert separates
+
+
+def test_is_degenerate_catches_semantic_unsat_and_tautology():
+    # Unsatisfiable: e must be true (to make e<->F(!e) hold when false fails) yet
+    # then F(!e) is false -> contradiction. SPOT's simplify does NOT reduce this
+    # to 0, so is_trivial misses it but is_degenerate (emptiness check) catches it.
+    unsat = "G((e <-> F(!e)))"
+    assert is_degenerate(unsat)
+    assert not is_trivial(unsat)
+    # Tautology: rejects no trace.
+    assert is_degenerate("G(a | !a)")
+
+
+def test_is_degenerate_accepts_normal_formulas():
+    for f in ["G(a <-> X(!a))", "G(r -> F(b))", "F(g)", "a U b", "G((e <-> X(!e)) & !(e & h))"]:
+        assert not is_degenerate(f), f
+
+
+def test_expand_spot_trace_preserves_cycle_period():
+    # expandSpotTrace must not lengthen the lasso period. `cycle{!a;a}` denotes
+    # the period-2 word a is F,T,F,T,...; expansion only fills in missing
+    # literals, so it must remain a 2-state cycle (regression: a stray
+    # cycle_states.append(cycle_states[0]) turned `{!a;a}` into `{!a;a;!a}`,
+    # i.e. period 3, which no longer satisfies G(a <-> X(!a))).
+    expanded = expandSpotTrace("a;cycle{!a;a}", {"a"})
+    assert is_trace_satisfied(expanded, "G(a <-> X(!a))"), expanded
+
+
+# A trace the generator labels "accepted" must actually be accepted by the
+# formula it was generated from. This consistency between generation and
+# checking is what the whole distinguishing-trace engine relies on; cyclic /
+# strict-alternation formulas are the cases the period bug silently broke.
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "G(a <-> X(!a))",
+        "G(((e <-> X(!e)) & !(e & h)))",
+        "G(r -> F(b))",
+        "F(g)",
+        "G(a -> X(b))",
+    ],
+)
+def test_generated_accepted_trace_is_actually_satisfied(formula):
+    trace = generate_accepted_trace(formula, excluded_traces=[])
+    assert trace, f"generator produced no accepted trace for {formula!r}"
+    assert is_trace_satisfied(trace, formula), (
+        f"generator claimed {trace!r} is accepted by {formula!r}, but it is not"
+    )
+
+
+def test_pool_has_informative_split_for_alternation_subsumption():
+    # L(G(e<->X!e)) is a proper subset of L(F(G(e<->X!e))): a trace that
+    # alternates from the start is in both; one that only alternates eventually
+    # is in the weaker formula alone. The pool must surface that distinguishing
+    # trace rather than collapsing to "accepted by neither".
+    strong = "G(((e <-> X(!e)) & !(e & h)))"
+    weak = "G(!(e & h)) & F(G(e <-> X(!e)))"
+    pool = generate_distinguishing_trace_pool([strong, weak])
+    assert any(
+        is_trace_satisfied(t, strong) != is_trace_satisfied(t, weak) for t in pool
+    ), "pool has no trace separating the two alternation formulas"

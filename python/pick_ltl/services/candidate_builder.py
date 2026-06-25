@@ -4,7 +4,7 @@ import random
 from contextlib import contextmanager
 
 from ..ltl.ltlnode import LTLNode, parse_ltl_string
-from ..ltl.spotutils import generate_distinguishing_words, is_trace_satisfied
+from ..ltl.spotutils import generate_distinguishing_words, is_degenerate, is_trace_satisfied
 from ..ltl.traceprocessor import getFormulaLiterals
 from ..mutation.ranking import rank_formulas
 from ..mutation.semantic import MisconceptionCode, getAllApplicableMisconceptions
@@ -45,6 +45,15 @@ def deterministic_random(seed: str):
         random.setstate(state)
 
 
+def _is_degenerate(formula: str) -> bool:
+    """is_degenerate, but never raises — on any SPOT error we keep the candidate
+    (a spurious survivor is less harmful than silently losing a valid formula)."""
+    try:
+        return is_degenerate(formula)
+    except Exception:
+        return False
+
+
 def _normalize_formula(formula: str, allowed_atoms: set[str]) -> str | None:
     try:
         normalized = str(parse_ltl_string(formula))
@@ -53,7 +62,25 @@ def _normalize_formula(formula: str, allowed_atoms: set[str]) -> str | None:
 
     if allowed_atoms and not set(getFormulaLiterals(normalized)).issubset(allowed_atoms):
         return None
+
+    # Drop mutants whose language is empty (unsatisfiable) or universal
+    # (tautology). They accept nothing / everything, so no answer ever
+    # contradicts them — an unsatisfiable mutant in particular survives every
+    # "reject" classification as a phantom "perfect" candidate and starves the
+    # distinguishing-trace search.
+    if _is_degenerate(normalized):
+        return None
+
     return normalized
+
+
+def drop_degenerate_candidate_states(
+    candidate_states: list[CandidateFormulaState],
+) -> list[CandidateFormulaState]:
+    """Remove candidates whose language is empty (unsatisfiable) or universal
+    (tautology). Used at every entry point — freshly built pools *and* imported
+    sessions — so a degenerate formula never enters the distinguishing loop."""
+    return [c for c in candidate_states if not _is_degenerate(c.formula)]
 
 
 def _is_equivalent(formula: str, existing: list[str]) -> bool:
@@ -160,6 +187,12 @@ def build_candidates(seeds: list[SeedFormulaResult]) -> list[CandidateFormulaSta
 
     for seed in seeds:
         if seed.formula in seen_formulas or _is_equivalent(seed.formula, seen_formulas):
+            continue
+        # Drop a seed whose language is empty (unsatisfiable) or universal
+        # (tautology) right at the start: it accepts nothing / everything, so it
+        # can never be eliminated and only pollutes the pool. Mutants are caught
+        # later by _normalize_formula; seeds are caught here.
+        if _is_degenerate(seed.formula):
             continue
         candidates.append(
             CandidateFormulaState(

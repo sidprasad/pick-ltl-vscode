@@ -123,8 +123,12 @@ def spotTraceToNodeReprs(sr):
         # Cycle candidate has no string 'cycle' in it here.
         cycled_content = getCycleContent(cycle)
         cycle_states = [NodeRepr(part) for part in cycled_content.split(';') if part.strip() != ""]
-        cycle_states.append(cycle_states[0])
-
+        # NB: the cycle states are exactly the period of the lasso — `cycle{A;B}`
+        # repeats A,B,A,B,... Do NOT append cycle_states[0] here: that lengthens
+        # the period (A,B -> A,B,A) and changes which traces the lasso denotes,
+        # so a round-trip through expandSpotTrace would no longer satisfy the
+        # formula it was generated from. The closing edge back to the first
+        # cycle state is a *rendering* concern; mermaidFromSpotTrace adds it.
 
     return {
         "prefix_states": states,
@@ -167,10 +171,15 @@ def getCycleContent(string):
     match = re.match(r'.*\{([^}]*)\}', string)
     return match.group(1) if match else ""
 
-def mermaidFromSpotTrace(sr):   
+def mermaidFromSpotTrace(sr):
     nodeRepr = spotTraceToNodeReprs(sr)
     prefix_states = nodeRepr["prefix_states"]
-    cycle_states = nodeRepr["cycle_states"]
+    cycle_states = list(nodeRepr["cycle_states"])
+    # Close the lasso visually: draw the edge from the last cycle state back to
+    # the first. This is rendering-only; the canonical trace (expandSpotTrace)
+    # must not carry this duplicate or its period would change.
+    if cycle_states:
+        cycle_states = cycle_states + [cycle_states[0]]
     states = prefix_states + cycle_states
 
     edges = []

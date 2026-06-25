@@ -4,7 +4,7 @@ from flask import Blueprint, jsonify
 
 from ..api.schemas import ApiError, json_error, require_json
 from ..ltl.ltlnode import LTLParseError
-from ..services.candidate_builder import create_initial_session
+from ..services.candidate_builder import create_initial_session, drop_degenerate_candidate_states
 from ..session.engine import (
     add_manual_examples,
     classify_trace,
@@ -91,6 +91,10 @@ def api_finalize():
 def api_import():
     payload = require_json()
     session = normalize_session_payload(payload.get("session", payload))
+    # Drop unsatisfiable/tautological candidates on the way in, so an imported
+    # session (e.g. a previously exported JSON predating this filter) can't carry
+    # a phantom candidate that survives every classification.
+    session.candidate_states = drop_degenerate_candidate_states(session.candidate_states)
     return jsonify(session.to_dict())
 
 

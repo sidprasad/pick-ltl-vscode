@@ -720,6 +720,30 @@ def is_trivial(formula_str):
     return str(simplified) in {"1", "0", "true", "false"}
 
 
+def is_degenerate(formula_str):
+    """True if the formula's language is empty (unsatisfiable) or universal
+    (a tautology) — i.e. it accepts no trace or every trace.
+
+    Such a candidate is useless for distinguishing: it rejects everything or
+    accepts everything, so no classification ever contradicts it. An empty
+    candidate in particular survives every "reject" answer as a phantom
+    "perfect" formula. `is_trivial` only catches *syntactic* trivialities
+    (simplify -> 1/0); this catches *semantic* ones like
+    `G((a <-> F(!a)))`, which is unsatisfiable but does not simplify to 0.
+    """
+    _require_spot()
+    try:
+        f = spot.formula(formula_str)
+    except Exception:
+        return False
+    try:
+        if f.translate().is_empty():  # unsatisfiable: accepts no trace
+            return True
+        return spot.formula.Not(f).translate().is_empty()  # tautology: rejects no trace
+    except Exception:
+        return False
+
+
 def gen_rand_ltl(atoms, tree_size, ltl_priorities, num_formulae=5):
     _require_spot()
     priorities = ",".join(f"{k}={v}" for k, v in ltl_priorities.items())

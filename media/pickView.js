@@ -1715,15 +1715,23 @@
             // Clear any existing error messages first
             errorSection.classList.add('hidden');
             clearStatusMessage();
-            
+
             showSection('voting');
             updateCandidates(candidates, status.threshold);
             updateWordHistory(status.wordHistory);
 
+            const active = (status && typeof status.activeCandidates === 'number') ? status.activeCandidates : null;
+            const total = (status && typeof status.totalCandidates === 'number') ? status.totalCandidates : null;
+            const progressLine = (active !== null && total !== null && total > active)
+                ? '<p>Your answers narrowed the pool to <strong>' + active + ' of ' + total +
+                  '</strong> candidate(s). Eliminated candidates are greyed out below with their downvotes.</p>'
+                : '';
+
             wordPair.innerHTML = '<div style="text-align: center; padding: 20px; background: var(--vscode-inputValidation-warningBackground); border: 1px solid var(--vscode-inputValidation-warningBorder); border-radius: 4px;">' +
                 '<h3>Unable to generate more words</h3>' +
                 '<p>The system ran out of distinguishing words to generate.</p>' +
-                '<p>Here are the remaining candidates. You can copy any candidate you prefer, or click "Build a New Formula" below to start fresh.</p>' +
+                progressLine +
+                '<p>You can copy any surviving candidate you prefer, or click "Build a New Formula" below to start fresh.</p>' +
                 '</div>';
         }
 

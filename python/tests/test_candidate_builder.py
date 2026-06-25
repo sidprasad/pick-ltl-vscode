@@ -5,13 +5,15 @@ import pytest
 pytest.importorskip("spot")
 
 from pick_ltl.ltl.ltlnode import LTLNode
+from pick_ltl.ltl.spotutils import is_degenerate
 from pick_ltl.ltl.traceprocessor import getFormulaLiterals
 from pick_ltl.services.candidate_builder import (
     MUTATION_EXPLANATIONS,
     SYNTACTIC_MUTATION_DEVIATION,
     build_candidates,
+    drop_degenerate_candidate_states,
 )
-from pick_ltl.session.models import AtomSpec, SeedFormulaResult
+from pick_ltl.session.models import AtomSpec, CandidateFormulaState, CandidateOrigin, SeedFormulaResult
 
 VALID_ORIGINS = {"seed", "semantic_mutation", "syntactic_mutation"}
 
@@ -66,6 +68,45 @@ def test_pool_is_pairwise_semantically_distinct(formula, atoms):
             assert not LTLNode.equiv(formulas[i], formulas[j]), (
                 f"equivalent candidates survived dedup: {formulas[i]} <=> {formulas[j]}"
             )
+
+
+def test_unsatisfiable_seed_is_dropped():
+    # `G(a <-> F(!a))` is unsatisfiable; it must never enter the pool, even
+    # though it is the seed. The satisfiable seed alongside it survives.
+    candidates = build_candidates(
+        [seed("G(a <-> F(!a))", ["a"]), seed("F(a)", ["a"])]
+    )
+    formulas = [c.formula for c in candidates]
+    assert formulas, "expected a non-empty pool from the satisfiable seed"
+    assert not any(is_degenerate(f) for f in formulas), formulas
+    assert any(LTLNode.equiv(f, "F(a)") for f in formulas)
+
+
+def _cand(formula):
+    return CandidateFormulaState(formula=formula, explanation="", origin=CandidateOrigin(kind="seed"))
+
+
+def test_drop_degenerate_candidate_states_filters_unsat_and_tautology():
+    # Mirrors what the import route does: strip empty/universal languages,
+    # keep the real ones.
+    states = [_cand("G(a <-> F(!a))"), _cand("G(a | !a)"), _cand("F(a)"), _cand("G(a -> X(b))")]
+    kept = [c.formula for c in drop_degenerate_candidate_states(states)]
+    assert kept == ["F(a)", "G(a -> X(b))"]
+
+
+def test_no_candidate_is_degenerate():
+    # No produced candidate may be unsatisfiable or a tautology: such a formula
+    # accepts nothing / everything, so it can never be eliminated and stalls the
+    # distinguishing loop. Exercises seeds known to spawn an unsatisfiable
+    # semantic mutant (e.g. `G(e <-> F(!e))`).
+    seeds = [
+        seed("G((e <-> X(!e)) & !(e & h))", ["e", "h"]),
+        seed("G(a -> X(b))", ["a", "b"]),
+        seed("F(a <-> X(!a))", ["a"]),
+    ]
+    candidates = build_candidates(seeds)
+    degenerate = [c.formula for c in candidates if is_degenerate(c.formula)]
+    assert not degenerate, f"degenerate candidates survived: {degenerate}"
 
 
 def test_candidates_use_only_seed_atoms():
