@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { WordClassification, WordClassificationRecord } from './pickTypes';
-import { generateLtlFromDescription, PermissionRequiredError, NoModelsAvailableError, ModelNotSupportedError, ModelNotEnabledError, getAvailableChatModels, LtlCandidate, LtlAtom } from './ltlService';
+import { generateLtlFromDescription, PermissionRequiredError, NoModelsAvailableError, ModelNotSupportedError, ModelNotEnabledError, ModelOutputUnparseableError, getAvailableChatModels, LtlCandidate, LtlAtom } from './ltlService';
 import { logger } from './logger';
 import { openIssueReport } from './issueReporter';
 import { SurveyPrompt } from './surveyPrompt';
@@ -570,6 +570,11 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
           return;
         }
 
+        if (error instanceof ModelOutputUnparseableError) {
+          this.narrateUnparseableModelOutput(error, modelDescription);
+          return;
+        }
+
         logger.error(error, 'Failed to generate candidate formulas');
         this.sendMessage({
           type: 'error',
@@ -634,12 +639,12 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       // voting loop.
       const built = this.sessionToCandidates(this.session!);
       if (built.length === 0) {
-        this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
-        this.sendMessage({
-          type: 'error',
-          message:
+        this.surfaceModelOutputFailure({
+          expressibility: warnings,
+          modelIssues: this.session?.warnings ?? [],
+          fallback:
             this.session?.message ||
-            'The model did not return any usable LTL formulas. Please try generating candidates again.'
+            `${modelDescription || 'The model'} did not return any usable LTL formulas. Please try generating candidates again.`
         });
         return;
       }
@@ -649,7 +654,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         candidates: built
       });
 
-      this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
+      this.surfaceModelWarnings({ expressibility: warnings, modelIssues: this.session?.warnings ?? [] });
 
       // Check cancellation before generating first pair
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
@@ -1143,6 +1148,11 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
           return;
         }
 
+        if (error instanceof ModelOutputUnparseableError) {
+          this.narrateUnparseableModelOutput(error, modelDescription);
+          return;
+        }
+
         logger.error(error, 'Failed to generate candidate formulas during refinement');
         this.sendMessage({
           type: 'error',
@@ -1217,12 +1227,12 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
 
       const builtRefined = this.sessionToCandidates(this.session!);
       if (builtRefined.length === 0) {
-        this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
-        this.sendMessage({
-          type: 'error',
-          message:
+        this.surfaceModelOutputFailure({
+          expressibility: warnings,
+          modelIssues: this.session?.warnings ?? [],
+          fallback:
             this.session?.message ||
-            'The model did not return any usable LTL formulas. Please try again.'
+            `${modelDescription || 'The model'} did not return any usable LTL formulas. Please try again.`
         });
         return;
       }
@@ -1233,7 +1243,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         preservedClassifications: sessionData.wordHistory.length
       });
 
-      this.surfaceModelWarnings([...warnings, ...(this.session?.warnings ?? [])]);
+      this.surfaceModelWarnings({ expressibility: warnings, modelIssues: this.session?.warnings ?? [] });
 
       // Check cancellation before generating first pair
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
@@ -1294,31 +1304,91 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private surfaceModelWarnings(warnings: string[]) {
-    const formatted = warnings
-      .map(warning => warning.trim())
-      .filter(warning => warning.length > 0)
-      .map(warning => warning.slice(0, 240));
-
-    if (formatted.length === 0) {
-      return;
-    }
-
-    const cautionIntro = 'This task may not be best suited for LTLs.';
-    
-    let warningBody: string;
-    if (formatted.length === 1) {
-      warningBody = formatted[0];
-    } else {
-      const bulletPoints = formatted.map(w => `• ${w}`).join('\n');
-      warningBody = bulletPoints;
-    }
-    
-    const disclaimer = `\n\nThis determination was made by the language model and may be incorrect.`;
-
+  /**
+   * Narrate the case where the model replied but its answer could not be parsed
+   * into usable LTL at all (no JSON, malformed JSON, or no formula-bearing
+   * candidates). Instead of the generic "couldn't generate candidates", we name
+   * the model as the source of the failure and quote what was wrong. This honesty
+   * is the point: it reminds the user that models don't always emit syntactically
+   * valid LTL, so they should scrutinize whatever the model does produce.
+   */
+  private narrateUnparseableModelOutput(error: ModelOutputUnparseableError, modelDescription?: string | null) {
+    const who = modelDescription || 'The model';
+    logger.warn(`Model returned unparseable output: ${error.detail}`);
     this.sendMessage({
-      type: 'warning',
-      message: `${cautionIntro}\n\n${warningBody}${disclaimer}`
+      type: 'modelOutputWarning',
+      message:
+        `${who} replied, but ${error.detail} — so no candidates could be built. ` +
+        `Models don't always produce valid LTL; double-check anything they generate, then try again.`
+    });
+  }
+
+  /**
+   * Surface non-fatal warnings about the model's output. Two distinct kinds are
+   * framed differently on purpose:
+   *
+   * - `expressibility`: the model judged the requirement hard/impossible to
+   *   express in LTL. A (fallible) claim about the task itself.
+   * - `modelIssues`: the backend had to skip some of the model's formulas — they
+   *   didn't parse as LTL, or used propositions outside the pinned alphabet. This
+   *   is a failure of the model, NOT evidence the task is unsuited to LTL, so it
+   *   must not borrow the "not suited to LTL" caution.
+   */
+  private formatModelWarnings(opts: { expressibility?: string[]; modelIssues?: string[] }): string | null {
+    const clean = (list: string[] | undefined): string[] =>
+      (list ?? [])
+        .map(warning => warning.trim())
+        .filter(warning => warning.length > 0)
+        .map(warning => warning.slice(0, 240));
+
+    const expressibility = clean(opts.expressibility);
+    const modelIssues = clean(opts.modelIssues);
+    if (expressibility.length === 0 && modelIssues.length === 0) {
+      return null;
+    }
+
+    const body = (list: string[]): string =>
+      list.length === 1 ? list[0] : list.map(w => `• ${w}`).join('\n');
+
+    const sections: string[] = [];
+    if (modelIssues.length > 0) {
+      sections.push(`Some of the model's formulas couldn't be used:\n\n${body(modelIssues)}`);
+    }
+    if (expressibility.length > 0) {
+      sections.push(
+        `This task may not be best suited for LTLs.\n\n${body(expressibility)}\n\n` +
+        `This determination was made by the language model and may be incorrect.`
+      );
+    }
+
+    return sections.join('\n\n');
+  }
+
+  /** Surface model-output warnings as the dismissable chip, without resetting the view. */
+  private surfaceModelWarnings(opts: { expressibility?: string[]; modelIssues?: string[] }) {
+    const message = this.formatModelWarnings(opts);
+    if (message) {
+      this.sendMessage({ type: 'warning', message });
+    }
+  }
+
+  /**
+   * The model replied, but nothing usable survived (no candidate parsed, or every
+   * formula was skipped). Reset the view to a retryable state and surface the
+   * reason — counts and framing included — as the dismissable chip rather than a
+   * full error block, so it reads the same as every other model-output warning.
+   */
+  private surfaceModelOutputFailure(opts: {
+    expressibility?: string[];
+    modelIssues?: string[];
+    fallback: string;
+  }) {
+    const detail = this.formatModelWarnings(opts);
+    this.sendMessage({
+      type: 'modelOutputWarning',
+      message: detail
+        ? `${detail}\n\n${opts.fallback}`
+        : opts.fallback
     });
   }
 

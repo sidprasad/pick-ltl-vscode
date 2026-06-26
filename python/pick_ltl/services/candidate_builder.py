@@ -333,8 +333,12 @@ def create_initial_session(
     # the user understands why the pool is smaller than the model's answer count.
     skipped = [seed.formula for seed in seeds if _safe_parse(seed.formula) is None]
     if skipped:
+        total = len(seeds)
+        n = len(skipped)
         warnings.append(
-            "Some interpretations from the model were not valid LTL and were skipped."
+            f"{n} of {total} interpretation{'s' if total != 1 else ''} the model "
+            f"proposed {'were' if n != 1 else 'was'} not valid LTL and "
+            f"{'were' if n != 1 else 'was'} skipped."
         )
     # On refine the alphabet is pinned: note any interpretations dropped for
     # introducing new propositions, so the user knows the set was kept stable.

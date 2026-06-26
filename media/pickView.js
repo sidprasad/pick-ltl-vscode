@@ -1410,6 +1410,15 @@
                 case 'error':
                     showError(message.message);
                     break;
+                case 'modelOutputWarning':
+                    // The model replied but its answer wasn't usable LTL. Reset the
+                    // UI to a retryable state (like showError) but surface the reason
+                    // as the small dismissable warning chip rather than a big error.
+                    setExampleButtonsDisabled(false);
+                    showSection('prompt');
+                    statusCancelBtn.classList.add('hidden');
+                    showWarning(message.message);
+                    break;
                 case 'clearWarnings':
                     clearWarnings();
                     break;

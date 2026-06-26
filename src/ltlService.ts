@@ -84,6 +84,22 @@ export class ModelNotEnabledError extends Error {
 }
 
 /**
+ * Error thrown when the model replied, but its reply could not be turned into
+ * usable LTL at all — no JSON, malformed JSON, or no formula-bearing candidates.
+ *
+ * This is distinct from a tool/infrastructure failure: it means the language
+ * model itself produced something we couldn't parse. Surfacing it specifically
+ * (rather than as a generic "try again") tells the user the model was at fault,
+ * which is the point — models do not always emit syntactically valid LTL.
+ */
+export class ModelOutputUnparseableError extends Error {
+  constructor(public readonly detail: string) {
+    super(detail);
+    this.name = 'ModelOutputUnparseableError';
+  }
+}
+
+/**
  * Get all available chat models from VS Code
  */
 export async function getAvailableChatModels(): Promise<AvailableChatModel[]> {
@@ -335,16 +351,21 @@ export async function generateLtlFromDescription(
   // Defensive JSON extraction
   const jsonMatch = fullText.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    throw new Error('Model did not return JSON.');
+    throw new ModelOutputUnparseableError("the model's reply did not contain a JSON object");
   }
 
-  const parsed = JSON.parse(jsonMatch[0]);
+  let parsed: any;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    throw new ModelOutputUnparseableError("the model returned malformed JSON that could not be parsed");
+  }
   const warnings = extractExpressibilityWarnings(parsed.warnings);
   const atoms = sanitizeAtoms(parsed.atoms);
   const declaredAtoms = new Set(atoms.map(a => a.name));
 
   if (!Array.isArray(parsed.candidates)) {
-    throw new Error('Model JSON missing `candidates` array.');
+    throw new ModelOutputUnparseableError("the model's reply was missing the `candidates` list of formulas");
   }
 
   // Shape + basic field validation
@@ -372,7 +393,12 @@ export async function generateLtlFromDescription(
   }
 
   if (validated.length === 0) {
-    throw new Error('No valid LTL candidates returned by model.');
+    const proposed = parsed.candidates.length;
+    throw new ModelOutputUnparseableError(
+      proposed > 0
+        ? `the model proposed ${proposed} candidate${proposed === 1 ? '' : 's'}, but none contained a usable formula`
+        : 'the model returned an empty list of candidates'
+    );
   }
 
   if (warnings.length > 0) {
