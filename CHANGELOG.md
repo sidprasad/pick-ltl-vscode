@@ -4,6 +4,19 @@ All notable changes to the **PICK — LTL Builder** extension are documented her
 
 ## [Unreleased]
 
+### Honest messaging when the model returns unusable LTL
+- When the model replies but its answer can't be turned into usable LTL — no
+  JSON, malformed JSON, no formula-bearing candidates, or every formula skipped
+  by the backend because it failed to parse — the extension now surfaces a single
+  **dismissable warning** that names the model and quotes what was wrong, then
+  returns to a retryable state. Previously this showed either a generic "Could
+  not generate any candidate formulas" error or a warning **misattributed** as
+  "this task may not be suited for LTL" (a formula failing to parse is a model
+  syntax failure, not evidence the task is inexpressible). The skip warning now
+  reports counts ("N of M interpretations … were not valid LTL and were
+  skipped"). Model-syntax problems and genuine expressibility concerns are now
+  framed separately.
+
 ### Backend is now standalone and minimal
 - The Python backend under `python/pick_ltl` is now **owned by this repo** (no
   longer mirrored from another project) and trimmed to exactly what the sidecar

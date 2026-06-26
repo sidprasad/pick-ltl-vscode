@@ -130,6 +130,55 @@ def test_create_initial_session_all_malformed_is_no_result():
     assert session.message
 
 
+# The model can return perfectly well-formed JSON whose `formula` field is not
+# valid LTL. These cases exercise that path with the kind of garbage models
+# actually emit:
+#   "G a &"     -> trailing binary operator with no right operand
+#   "XXX (b))"  -> unbalanced parenthesis (note: "XXX(b)" alone is VALID — three
+#                  nested Next operators — so the rejection is purely structural)
+WELLFORMED_JSON_BAD_FORMULA = [
+    ("G a &", ["a", "b"]),
+    ("XXX (b))", ["a", "b"]),
+]
+
+
+@pytest.mark.parametrize("bad_formula,atoms", WELLFORMED_JSON_BAD_FORMULA)
+def test_malformed_formula_in_valid_json_is_skipped_not_fatal(bad_formula, atoms):
+    # A malformed formula riding in otherwise-valid JSON is parsed-and-skipped; it
+    # never enters the pool, and a valid sibling seed still yields candidates.
+    candidates = build_candidates([seed(bad_formula, atoms), seed("G(a -> F(b))", atoms)])
+    formulas = [c.formula for c in candidates]
+    assert formulas, "valid sibling seed should still yield a pool"
+    assert any(LTLNode.equiv(f, "G(a -> F(b))") for f in formulas)
+    assert bad_formula not in formulas, "malformed formula must not enter the pool"
+
+
+def test_skipped_warning_reports_partial_count():
+    # One of two interpretations is malformed: the warning names the count so the
+    # user understands why the pool is smaller than the model's answer.
+    session = create_initial_session(
+        "p", {}, [seed("G a &", ["a", "b"]), seed("G(a -> F(b))", ["a", "b"])]
+    )
+    assert session.candidate_states, "valid seed should survive"
+    warning = next((w for w in session.warnings if "not valid LTL" in w), None)
+    assert warning is not None, session.warnings
+    assert "1 of 2" in warning
+    assert "was not valid LTL" in warning
+
+
+def test_all_malformed_example_formulas_yield_no_result_with_full_count():
+    session = create_initial_session(
+        "p", {}, [seed("G a &", ["a"]), seed("XXX (b))", ["b"])]
+    )
+    assert session.candidate_states == []
+    assert session.mode == "no_result"
+    assert session.message
+    warning = next((w for w in session.warnings if "not valid LTL" in w), None)
+    assert warning is not None, session.warnings
+    assert "2 of 2" in warning
+    assert "were not valid LTL" in warning
+
+
 def test_no_candidate_is_degenerate():
     # No produced candidate may be unsatisfiable or a tautology: such a formula
     # accepts nothing / everything, so it can never be eliminated and stalls the
