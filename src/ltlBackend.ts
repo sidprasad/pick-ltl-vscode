@@ -95,6 +95,14 @@ export class BackendUnavailableError extends Error {
   }
 }
 
+/** Result of validating one candidate trace string against SPOT's lasso grammar. */
+export interface TraceValidationResult {
+  trace: string;
+  valid: boolean;
+  /** Human-readable reason when `valid` is false; null when valid. */
+  error: string | null;
+}
+
 /** Thrown when the backend responds with a non-2xx status. */
 export class BackendRequestError extends Error {
   status: number;
@@ -212,6 +220,17 @@ export class LtlBackend {
       accept_traces: acceptTraces,
       reject_traces: rejectTraces
     });
+  }
+
+  /**
+   * Validate that each string is a well-formed SPOT lasso trace. Sessionless and
+   * non-mutating — used to reject user-entered traces at the input boundary with
+   * a clear reason before they reach the vote engine. SPOT only exists in the
+   * Python backend, so this validation cannot be done client-side.
+   */
+  async validateTraces(traces: string[]): Promise<TraceValidationResult[]> {
+    const data = await this.request<{ results?: TraceValidationResult[] }>('/api/trace/validate', { traces });
+    return data.results ?? [];
   }
 
   finalize(session: SessionState, formula?: string | null): Promise<SessionState> {

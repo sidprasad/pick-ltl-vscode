@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from itertools import combinations
 import random
 
@@ -195,6 +197,51 @@ def generate_trace_in_symmetric_difference(f1s, f2s, excluded_traces = []):
     expanded_run = expandSpotTrace(run, shared_literals)
     
     return expanded_run
+
+
+def _clean_spot_word_error(exc: Exception) -> str:
+    """Turn SPOT's multi-line parse_word error into one human-readable reason.
+
+    SPOT echoes the input with a caret pointer, e.g.
+        >>> a & b
+                 ^
+        A twa_word must contain a cycle
+    We drop the echo/caret lines, keep the descriptive ones, and translate the
+    most common jargon ("twa_word must contain a cycle") into plain language.
+    """
+    reason_lines = [
+        line.strip()
+        for line in str(exc).splitlines()
+        if line.strip()
+        and not line.lstrip().startswith(">>>")
+        and set(line.strip()) != {"^"}
+    ]
+    reason = "; ".join(dict.fromkeys(reason_lines)).strip() or "it could not be parsed"
+    if "must contain a cycle" in reason:
+        reason = "a trace must contain a cycle — the part that repeats forever"
+    return reason
+
+
+def validate_trace(trace) -> str | None:
+    """Return a human-readable reason if `trace` is not a valid SPOT lasso word,
+    or None if it is valid.
+
+    SPOT words must end in a cycle, e.g. ``a & b; cycle{!a}`` or ``cycle{a}``.
+    This is the single source of truth for "is this trace well-formed", used to
+    reject user-entered traces before they skew the vote (an unparseable trace
+    otherwise matches no candidate and silently contradicts every accept)."""
+    text = str(trace).strip()
+    if not text:
+        return "A trace cannot be empty."
+    _require_spot()
+    try:
+        spot.parse_word(text)
+    except Exception as exc:  # SPOT raises SyntaxError with a multi-line reason
+        return (
+            f"{_clean_spot_word_error(exc)}. Expected SPOT lasso format, "
+            "e.g. `a & b; cycle{!a}` or `cycle{a}`."
+        )
+    return None
 
 
 def is_trace_satisfied(trace, formula):

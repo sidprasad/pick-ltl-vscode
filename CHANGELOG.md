@@ -4,6 +4,16 @@ All notable changes to the **PICK — LTL Builder** extension are documented her
 
 ## [Unreleased]
 
+### Validate user-entered traces
+- Traces you type yourself are now checked against SPOT's lasso grammar before
+  they're used. Invalid input is rejected with a clear reason (e.g. "a trace
+  must contain a cycle — the part that repeats forever") instead of being
+  silently swallowed and quietly skewing the vote. Covers the "add your own
+  examples" panel (rejected on submit, with an inline message) and inline edits
+  of a pair's traces (reverted in place with the reason). Session import stays
+  tolerant. Backed by a new sessionless `POST /api/trace/validate` endpoint —
+  validation lives in the Python backend because SPOT is the parse authority.
+
 ### Honest messaging when the model returns unusable LTL
 - When the model replies but its answer can't be turned into usable LTL — no
   JSON, malformed JSON, no formula-bearing candidates, or every formula skipped

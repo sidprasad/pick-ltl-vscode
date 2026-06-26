@@ -1474,6 +1474,9 @@
                 case 'examplesRejected':
                     handleExamplesRejected(message.message);
                     break;
+                case 'wordEditRejected':
+                    handleWordEditRejected(message.invalidWord, message.revertTo, message.message);
+                    break;
                 case 'voteProcessed':
                     updateStatus(message.status);
                     break;
@@ -2043,6 +2046,27 @@
             setExamplesStatus(errorMessage || 'Unable to use those examples.', 'error');
         }
 
+        function handleWordEditRejected(invalidWord, revertTo, errorMessage) {
+            // The backend rejected an inline trace edit. Find the card showing the
+            // invalid text and restore it to the last valid trace, then explain why.
+            const cards = document.querySelectorAll('.word-card[data-word]');
+            cards.forEach(function(card) {
+                if (card.getAttribute('data-word') !== invalidWord) {
+                    return;
+                }
+                const span = card.querySelector('.word-readable');
+                const literal = card.querySelector('.word-literal');
+                if (span) {
+                    span.textContent = revertTo;
+                }
+                if (literal) {
+                    literal.textContent = toLiteralString(revertTo);
+                }
+                card.setAttribute('data-word', revertTo);
+            });
+            showWarning(errorMessage || 'That edited trace is not valid and was reverted.');
+        }
+
         function classifyWord(word, classification) {
             log('info', 'classifyWord called: word="' + word + '" (length: ' + word.length + '), classification="' + classification + '"');
             classifiedWords.add(word);
@@ -2150,17 +2174,22 @@
                         return;
                     }
                     
-                    if (newWord !== currentWord) {
-                        const previousWord = currentWord;
+                    // Diff against data-word (the last *applied* trace, which is also
+                    // what the vote buttons read), NOT the closure copy. If an edit is
+                    // rejected, handleWordEditRejected resets data-word — so the next
+                    // edit still posts the correct baseline as originalWord.
+                    const baseline = card.getAttribute('data-word');
+                    if (newWord !== baseline) {
                         currentWord = newWord;
                         card.setAttribute('data-word', newWord);
                         literalSpan.textContent = toLiteralString(newWord);
-                        log('info', 'Word edited from "' + card.getAttribute('data-original-word') + '" to "' + newWord + '"');
-                        
-                        // Notify backend about the word edit
+                        log('info', 'Word edited from "' + baseline + '" to "' + newWord + '"');
+
+                        // Notify backend about the word edit (it validates the trace
+                        // and either applies it or sends back wordEditRejected).
                         vscode.postMessage({
                             type: 'wordEdited',
-                            originalWord: previousWord,
+                            originalWord: baseline,
                             newWord: newWord
                         });
                     }
