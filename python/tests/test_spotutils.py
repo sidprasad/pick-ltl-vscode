@@ -12,8 +12,35 @@ from pick_ltl.ltl.spotutils import (
     is_degenerate,
     is_trace_satisfied,
     is_trivial,
+    validate_trace,
 )
 from pick_ltl.ltl.traceprocessor import expandSpotTrace
+
+
+@pytest.mark.parametrize("trace", ["a & b; cycle{!a}", "cycle{a}", "a; cycle{b}", "  cycle{a}  "])
+def test_validate_trace_accepts_wellformed_lasso_words(trace):
+    assert validate_trace(trace) is None
+
+
+def test_validate_trace_empty_is_rejected():
+    assert "empty" in validate_trace("   ").lower()
+
+
+def test_validate_trace_without_cycle_explains_cycle_requirement():
+    # The single most common user mistake: a finite prefix with no cycle. SPOT's
+    # own "twa_word must contain a cycle" jargon is translated to plain language.
+    msg = validate_trace("a & b")
+    assert msg is not None
+    assert "cycle" in msg.lower()
+    assert "twa_word" not in msg  # jargon must be translated away
+
+
+@pytest.mark.parametrize("trace", ["cyckle{a}", "a & b; cycle{!a", "XXX (b))", "a &; cycle{b}"])
+def test_validate_trace_rejects_malformed_with_format_hint(trace):
+    msg = validate_trace(trace)
+    assert msg is not None
+    # Every rejection points the user at the expected shape.
+    assert "cycle{" in msg
 
 
 def test_are_equivalent_recognizes_equivalent_formulas():

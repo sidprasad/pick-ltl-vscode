@@ -124,3 +124,31 @@ def test_reclassify_out_of_range_index_is_400_not_500(client):
 def test_unknown_route_stays_404(client):
     # The catch-all error handler must not turn HTTP errors into 500s.
     assert client.get("/api/does-not-exist").status_code == 404
+
+
+def test_validate_trace_route_marks_valid_and_invalid(client):
+    resp = client.post(
+        "/api/trace/validate",
+        json={"traces": ["a & b; cycle{!a}", "cycle{a}", "a & b", "cyckle{a}", ""]},
+    )
+    assert resp.status_code == 200
+    results = resp.get_json()["results"]
+    by_trace = {r["trace"]: r for r in results}
+
+    assert by_trace["a & b; cycle{!a}"]["valid"] is True
+    assert by_trace["a & b; cycle{!a}"]["error"] is None
+    assert by_trace["cycle{a}"]["valid"] is True
+
+    # A trace with no cycle is the most common user mistake; the reason says so.
+    assert by_trace["a & b"]["valid"] is False
+    assert "cycle" in by_trace["a & b"]["error"].lower()
+
+    assert by_trace["cyckle{a}"]["valid"] is False
+    assert by_trace[""]["valid"] is False
+    assert "empty" in by_trace[""]["error"].lower()
+
+
+def test_validate_trace_route_rejects_non_list(client):
+    resp = client.post("/api/trace/validate", json={"traces": "a;cycle{a}"})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]

@@ -6,7 +6,7 @@ import { generateLtlFromDescription, PermissionRequiredError, NoModelsAvailableE
 import { logger } from './logger';
 import { openIssueReport } from './issueReporter';
 import { SurveyPrompt } from './surveyPrompt';
-import { LtlBackend, BackendUnavailableError, SessionState, AtomSpec } from './ltlBackend';
+import { LtlBackend, BackendUnavailableError, SessionState, AtomSpec, TraceValidationResult } from './ltlBackend';
 import { PythonSidecar, SidecarError } from './sidecar';
 import { traceToRenderData } from './traceRender';
 
@@ -299,7 +299,9 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
           this.handleUpdateClassification(data.index, data.classification);
           break;
         case 'wordEdited':
-          this.handleWordEdited(data.originalWord, data.newWord);
+          this.handleWordEdited(data.originalWord, data.newWord).catch(error =>
+            logger.error(error, 'Unhandled error in handleWordEdited')
+          );
           break;
         case 'vote':
           this.handleVote(data.acceptedWord);
@@ -788,6 +790,15 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       const acceptList = limited.filter(entry => entry.classification === 'accept').map(entry => entry.word);
       const rejectList = limited.filter(entry => entry.classification === 'reject').map(entry => entry.word);
 
+      // Reject syntactically invalid traces up front. An unparseable trace would
+      // otherwise be recorded as matching no candidate and silently contradict
+      // every "should match" — quietly skewing the vote with no feedback.
+      const invalid = (await this.backend.validateTraces([...acceptList, ...rejectList])).filter(v => !v.valid);
+      if (invalid.length > 0) {
+        this.sendMessage({ type: 'examplesRejected', message: this.formatInvalidTraceMessage(invalid) });
+        return;
+      }
+
       this.session = await this.backend.addExamples(this.session, acceptList, rejectList);
       logger.info(`Applied ${limited.length} direct classification(s) from user-provided examples.`);
 
@@ -963,27 +974,66 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** Build a user-facing message naming each invalid trace and why it's invalid. */
+  private formatInvalidTraceMessage(invalid: TraceValidationResult[]): string {
+    const lines = invalid.map(v => `“${v.trace}” — ${v.error ?? 'not a valid trace.'}`);
+    const head =
+      invalid.length === 1
+        ? 'That example is not a valid trace:'
+        : `${invalid.length} of your examples are not valid traces:`;
+    return `${head}\n${lines.join('\n')}`;
+  }
+
+  /** Apply a validated word edit to the in-memory current pair. */
+  private applyWordEdit(originalWord: string, newWord: string) {
+    if (this.currentPairTraces) {
+      const idx = this.currentPairTraces.indexOf(originalWord);
+      if (idx >= 0) {
+        this.currentPairTraces[idx] = newWord;
+      }
+    }
+    if (this.session?.current_pair) {
+      if (this.session.current_pair.trace1 === originalWord) {
+        this.session.current_pair.trace1 = newWord;
+      } else if (this.session.current_pair.trace2 === originalWord) {
+        this.session.current_pair.trace2 = newWord;
+      }
+    }
+  }
+
   /**
-   * Handle word edit in the current voting pair
+   * Handle an inline edit of a trace in the current voting pair. The user can
+   * type anything, so the edited trace is validated against SPOT before it's
+   * accepted; an invalid edit is reverted in the webview with the reason rather
+   * than silently voting with an unparseable trace.
    */
-  private handleWordEdited(originalWord: string, newWord: string) {
+  private async handleWordEdited(originalWord: string, newWord: string) {
+    const trimmed = (newWord ?? '').trim();
     try {
-      logger.info(`Word edited: "${originalWord}" -> "${newWord}"`);
-      if (this.currentPairTraces) {
-        const idx = this.currentPairTraces.indexOf(originalWord);
-        if (idx >= 0) {
-          this.currentPairTraces[idx] = newWord;
-        }
+      logger.info(`Word edited: "${originalWord}" -> "${trimmed}"`);
+      if (!trimmed || trimmed === originalWord) {
+        return;
       }
-      if (this.session?.current_pair) {
-        if (this.session.current_pair.trace1 === originalWord) {
-          this.session.current_pair.trace1 = newWord;
-        } else if (this.session.current_pair.trace2 === originalWord) {
-          this.session.current_pair.trace2 = newWord;
-        }
+      const [validation] = await this.backend.validateTraces([trimmed]);
+      if (validation && !validation.valid) {
+        this.sendMessage({
+          type: 'wordEditRejected',
+          invalidWord: newWord,
+          revertTo: originalWord,
+          message: `“${trimmed}” — ${validation.error ?? 'not a valid trace.'}`
+        });
+        return;
       }
+      this.applyWordEdit(originalWord, trimmed);
     } catch (error) {
-      logger.error(error, 'Error updating word in pair');
+      logger.error(error, 'Error validating edited word');
+      // Don't apply an unchecked trace — revert and tell the user why.
+      this.sendMessage({
+        type: 'wordEditRejected',
+        invalidWord: newWord,
+        revertTo: originalWord,
+        message: 'Could not validate the edited trace; reverted to the original.'
+      });
     }
   }
 

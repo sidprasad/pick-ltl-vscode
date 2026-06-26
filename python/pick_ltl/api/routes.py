@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify
 
 from ..api.schemas import ApiError, json_error, require_json
 from ..ltl.ltlnode import LTLParseError
+from ..ltl.spotutils import validate_trace
 from ..services.candidate_builder import create_initial_session, drop_degenerate_candidate_states
 from ..session.engine import (
     add_manual_examples,
@@ -85,6 +86,25 @@ def api_examples():
     accept_traces = payload.get("accept_traces", [])
     reject_traces = payload.get("reject_traces", [])
     return jsonify(add_manual_examples(session, accept_traces, reject_traces).to_dict())
+
+
+@bp.route("/api/trace/validate", methods=["POST"])
+def api_validate_traces():
+    """Check whether each given string is a well-formed SPOT lasso trace.
+
+    Sessionless and non-mutating: the extension calls this at the user-input
+    boundary (custom examples, inline trace edits) so an invalid trace is caught
+    with a clear reason instead of being silently swallowed by the vote engine.
+    """
+    payload = require_json()
+    traces = payload.get("traces", [])
+    if not isinstance(traces, list):
+        raise ApiError("`traces` must be a list.")
+    results = []
+    for trace in traces:
+        error = validate_trace(trace)
+        results.append({"trace": str(trace), "valid": error is None, "error": error})
+    return jsonify({"results": results})
 
 
 @bp.route("/api/session/finalize", methods=["POST"])
