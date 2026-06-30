@@ -207,6 +207,9 @@
             background: var(--vscode-editor-background);
             border-radius: 4px;
             border: 1px solid var(--vscode-panel-border);
+            /* Content-only accessibility zoom (see #zoomControls). Enlarges text and
+               trace diagrams within the panel without touching VS Code's own chrome. */
+            zoom: var(--pick-content-zoom, 1);
         }
 
         .prompt-row {
@@ -1066,6 +1069,7 @@
             color: var(--vscode-errorForeground);
             border-radius: 4px;
             margin: 10px 0;
+            zoom: var(--pick-content-zoom, 1);
         }
 
         /* New styles for word classification UI */
@@ -1702,3 +1706,63 @@
         /* LTL trace SVG diagram inside a word card */
         .trace-display { width: 100%; min-height: 96px; overflow-x: auto; margin-bottom: 8px; padding: 6px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-editor-background); }
         .trace-display svg { max-width: none; height: auto; }
+
+        /* Content zoom pill — fixed-position accessibility control that scales only the
+           panel content (.section / .error) via the --pick-content-zoom custom property.
+           It is intentionally NOT a .section, so it stays a constant size and reachable. */
+        .zoom-controls {
+            position: fixed;
+            right: 12px;
+            bottom: 12px;
+            z-index: 25;
+            display: flex;
+            align-items: stretch;
+            gap: 1px;
+            padding: 2px;
+            border-radius: 999px;
+            background: var(--vscode-panel-background, var(--vscode-editor-background));
+            border: 1px solid var(--vscode-panel-border);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+            opacity: 0.55;
+            transition: opacity 0.15s ease;
+        }
+        .zoom-controls:hover,
+        .zoom-controls:focus-within {
+            opacity: 1;
+        }
+        .zoom-controls button {
+            appearance: none;
+            border: none;
+            background: transparent;
+            color: var(--vscode-foreground);
+            font-family: var(--vscode-font-family);
+            cursor: pointer;
+            border-radius: 999px;
+            padding: 4px 8px;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .zoom-controls .zoom-btn {
+            min-width: 28px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .zoom-controls .zoom-level {
+            min-width: 46px;
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+            color: var(--vscode-descriptionForeground);
+        }
+        .zoom-controls button:hover:not(:disabled) {
+            background: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 14%, transparent));
+        }
+        .zoom-controls button:focus-visible {
+            outline: 1px solid var(--vscode-focusBorder);
+            outline-offset: -1px;
+        }
+        .zoom-controls button:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
