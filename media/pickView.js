@@ -1501,7 +1501,7 @@
                     showNoFormulaFound(message.message, message.candidateDetails, message.wordsIn, message.wordsOut, message.wordHistory);
                     break;
                 case 'insufficientWords':
-                    showInsufficientWords(message.candidates, message.status);
+                    showInsufficientWords(message.candidates, message.status, message.message);
                     break;
                 case 'reset':
                     resetUI(message.preserveClassifications);
@@ -1723,7 +1723,7 @@
             statusCancelBtn.classList.add('hidden');
         }
 
-        function showInsufficientWords(candidates, status) {
+        function showInsufficientWords(candidates, status, message) {
             // Clear any existing error messages first
             errorSection.classList.add('hidden');
             clearStatusMessage();
@@ -1739,9 +1739,15 @@
                   '</strong> candidate(s). Eliminated candidates are greyed out below with their downvotes.</p>'
                 : '';
 
+            // Honor a backend-supplied reason (e.g. the no-progress safety valve's
+            // standstill note) instead of always claiming we "ran out of words".
+            const bodyText = (typeof message === 'string' && message.trim().length > 0)
+                ? message
+                : 'The system ran out of distinguishing words to generate.';
+
             wordPair.innerHTML = '<div style="text-align: center; padding: 20px; background: var(--vscode-inputValidation-warningBackground); border: 1px solid var(--vscode-inputValidation-warningBorder); border-radius: 4px;">' +
-                '<h3>Unable to generate more words</h3>' +
-                '<p>The system ran out of distinguishing words to generate.</p>' +
+                '<h3>No more comparisons to show</h3>' +
+                '<p>' + escapeHtml(bodyText) + '</p>' +
                 progressLine +
                 '<p>You can copy any surviving candidate you prefer, or click "Build a New Formula" below to start fresh.</p>' +
                 '</div>';

@@ -205,11 +205,14 @@ class SessionState:
     exhausted: bool = False
     message: str = ""
     # Staleness tracking for the no-progress safety valve. `pairs_without_progress`
-    # counts consecutive completed pairs that eliminated nothing; `last_active_count`
-    # is the active-candidate count at the previous pair (-1 = not yet measured).
+    # counts consecutive completed pairs that left the live candidate set *exactly*
+    # as it was (nothing eliminated). `last_active_signature` is that set at the
+    # previous pair (None = not yet measured); comparing the whole set — not just
+    # its size — means a reclassify that revives or swaps candidates resets the
+    # streak instead of being miscounted as another stale pair.
     pairs_without_progress: int = 0
     max_pairs_without_progress: int = DEFAULT_MAX_PAIRS_WITHOUT_PROGRESS
-    last_active_count: int = -1
+    last_active_signature: list[str] | None = None
 
     def active_candidates(self) -> list[CandidateFormulaState]:
         return [candidate for candidate in self.candidate_states if not candidate.eliminated]
@@ -231,7 +234,9 @@ class SessionState:
             "message": self.message,
             "pairs_without_progress": self.pairs_without_progress,
             "max_pairs_without_progress": self.max_pairs_without_progress,
-            "last_active_count": self.last_active_count,
+            "last_active_signature": (
+                list(self.last_active_signature) if self.last_active_signature is not None else None
+            ),
         }
 
     @classmethod
@@ -268,5 +273,9 @@ class SessionState:
                     or DEFAULT_MAX_PAIRS_WITHOUT_PROGRESS
                 ),
             ),
-            last_active_count=int(data.get("last_active_count", -1)),
+            last_active_signature=(
+                [str(f) for f in data["last_active_signature"]]
+                if isinstance(data.get("last_active_signature"), list)
+                else None
+            ),
         )

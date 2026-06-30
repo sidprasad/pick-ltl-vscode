@@ -89,7 +89,7 @@ export interface SessionState {
    * across the round trip; the extension never mutates these directly. */
   pairs_without_progress?: number;
   max_pairs_without_progress?: number;
-  last_active_count?: number;
+  last_active_signature?: string[] | null;
 }
 
 /** Thrown when the sidecar is not reachable (not started / crashed / wrong URL). */

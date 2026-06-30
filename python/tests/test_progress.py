@@ -55,28 +55,59 @@ def _session(*formulas, **kwargs):
 
 def test_first_pair_seeds_baseline_without_counting():
     session = _session("G a", "G b")
-    _note_pair_progress(session, 2)
-    assert session.last_active_count == 2
+    _note_pair_progress(session, session.active_candidates())
+    assert session.last_active_signature == ["G a", "G b"]
     assert session.pairs_without_progress == 0
 
 
 def test_counter_increments_when_active_set_unchanged():
     session = _session("G a", "G b", "G c")
-    _note_pair_progress(session, 3)  # seed
-    _note_pair_progress(session, 3)  # no change
-    _note_pair_progress(session, 3)  # no change
+    active = session.active_candidates()
+    _note_pair_progress(session, active)  # seed
+    _note_pair_progress(session, active)  # no change -> 1
+    _note_pair_progress(session, active)  # no change -> 2
     assert session.pairs_without_progress == 2
 
 
 def test_counter_resets_when_a_candidate_is_eliminated():
     session = _session("G a", "G b", "G c")
-    _note_pair_progress(session, 3)  # seed
-    _note_pair_progress(session, 3)  # stall -> 1
-    _note_pair_progress(session, 3)  # stall -> 2
+    _note_pair_progress(session, session.active_candidates())  # seed
+    _note_pair_progress(session, session.active_candidates())  # stall -> 1
+    _note_pair_progress(session, session.active_candidates())  # stall -> 2
     assert session.pairs_without_progress == 2
-    _note_pair_progress(session, 2)  # one eliminated -> progress
+    session.candidate_states[0].eliminated = True
+    _note_pair_progress(session, session.active_candidates())  # one eliminated -> progress
     assert session.pairs_without_progress == 0
-    assert session.last_active_count == 2
+    assert session.last_active_signature == ["G b", "G c"]
+
+
+def test_reviving_a_candidate_resets_the_counter():
+    """A reclassify that brings an eliminated candidate back grows the live set;
+    it must reset the streak, not be charged as another stale pair (regression
+    for the earlier count-only baseline, which incremented on a count increase)."""
+    session = _session("G a", "G b", "G c")
+    session.candidate_states[0].eliminated = True
+    _note_pair_progress(session, session.active_candidates())  # seed at 2 active
+    _note_pair_progress(session, session.active_candidates())  # stall -> 1
+    assert session.pairs_without_progress == 1
+    session.candidate_states[0].eliminated = False  # revived -> active grows to 3
+    _note_pair_progress(session, session.active_candidates())
+    assert session.pairs_without_progress == 0
+    assert session.last_active_signature == ["G a", "G b", "G c"]
+
+
+def test_same_size_different_set_resets_the_counter():
+    """Same active *count* but a different active *set* (one swapped for another)
+    is a correction, not a stall — only an unchanged set counts as no progress."""
+    session = _session("G a", "G b", "G c")
+    session.candidate_states[2].eliminated = True  # active = {G a, G b}
+    _note_pair_progress(session, session.active_candidates())  # seed
+    _note_pair_progress(session, session.active_candidates())  # stall -> 1
+    assert session.pairs_without_progress == 1
+    session.candidate_states[2].eliminated = False  # revive G c ...
+    session.candidate_states[0].eliminated = True   # ... and drop G a: still 2 active
+    _note_pair_progress(session, session.active_candidates())
+    assert session.pairs_without_progress == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -213,11 +244,11 @@ def test_progress_fields_survive_serialization_round_trip():
     session = _session("G a", "G b")
     session.pairs_without_progress = 2
     session.max_pairs_without_progress = 5
-    session.last_active_count = 2
+    session.last_active_signature = ["G a", "G b"]
     restored = SessionState.from_dict(session.to_dict())
     assert restored.pairs_without_progress == 2
     assert restored.max_pairs_without_progress == 5
-    assert restored.last_active_count == 2
+    assert restored.last_active_signature == ["G a", "G b"]
 
 
 def test_legacy_session_without_progress_fields_gets_defaults():
@@ -226,4 +257,4 @@ def test_legacy_session_without_progress_fields_gets_defaults():
     restored = SessionState.from_dict(legacy)
     assert restored.pairs_without_progress == 0
     assert restored.max_pairs_without_progress == DEFAULT_MAX_PAIRS_WITHOUT_PROGRESS
-    assert restored.last_active_count == -1
+    assert restored.last_active_signature is None

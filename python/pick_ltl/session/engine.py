@@ -214,23 +214,27 @@ def _select_best_candidate(session: SessionState) -> CandidateFormulaState | Non
     return max(confirmed, key=lambda c: (c.positive_votes, -c.negative_votes))
 
 
-def _note_pair_progress(session: SessionState, active_count: int) -> None:
-    """Update the no-progress counter once per completed pair. Progress = the
-    live candidate set shrank since the previous pair (an elimination) or we
-    reached a sole survivor. The first call only seeds the baseline."""
-    if session.last_active_count < 0:
-        session.last_active_count = active_count
+def _note_pair_progress(session: SessionState, active: list[CandidateFormulaState]) -> None:
+    """Update the no-progress counter once per completed pair. A pair is *stale*
+    only when it left the live candidate set exactly as it was — nothing
+    eliminated. Any change resets the streak: an elimination (real progress), but
+    also a reclassify that revives or swaps candidates (a correction, which must
+    not be charged as another stale pair). The first call only seeds the
+    baseline."""
+    signature = sorted(candidate.formula for candidate in active)
+    if session.last_active_signature is None:
+        session.last_active_signature = signature
         return
-    if active_count < session.last_active_count:
-        session.pairs_without_progress = 0
-    else:
+    if signature == session.last_active_signature:
         session.pairs_without_progress += 1
-    session.last_active_count = active_count
+    else:
+        session.pairs_without_progress = 0
+    session.last_active_signature = signature
 
 
 def next_pair(session: SessionState) -> SessionState:
     active = session.active_candidates()
-    _note_pair_progress(session, len(active))
+    _note_pair_progress(session, active)
     if len(active) == 0:
         return _set_result(session, "No Candidate Survived", None, "All candidates were eliminated.", "no_result")
 
