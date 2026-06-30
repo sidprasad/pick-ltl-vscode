@@ -12,6 +12,12 @@
 <body>
     <!--SPLASH_HTML_PLACEHOLDER-->
     <div class="container">
+        <!-- Content zoom pill (accessibility): enlarges text + trace diagrams only -->
+        <div id="zoomControls" class="zoom-controls" role="group" aria-label="Content zoom">
+            <button id="zoomOutBtn" class="zoom-btn" type="button" title="Smaller text &amp; diagrams" aria-label="Zoom content out">A&minus;</button>
+            <button id="zoomResetBtn" class="zoom-level" type="button" title="Reset zoom" aria-label="Reset content zoom to 100 percent">100%</button>
+            <button id="zoomInBtn" class="zoom-btn" type="button" title="Larger text &amp; diagrams" aria-label="Zoom content in">A+</button>
+        </div>
         <!-- Status Bar (global - shown during LLM operations) -->
             <div id="statusBar" class="status-bar hidden">
                 <div id="statusMessage" class="status-message"></div>

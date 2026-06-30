@@ -41,6 +41,11 @@
         const traceSyntaxToggle = document.getElementById('traceSyntaxToggle');
         const candidatesIndicator = document.getElementById('candidatesIndicator');
 
+        // Content-zoom controls (accessibility)
+        const zoomOutBtn = document.getElementById('zoomOutBtn');
+        const zoomInBtn = document.getElementById('zoomInBtn');
+        const zoomResetBtn = document.getElementById('zoomResetBtn');
+
         // Model selector elements
         const modelSelect = document.getElementById('modelSelect');
         const modelSelectorRow = document.getElementById('modelSelectorRow');
@@ -64,7 +69,54 @@
         let promptHistory = Array.isArray(viewState.promptHistory)
             ? viewState.promptHistory.slice(0, 5)
             : [];
-        
+
+        // Content-only zoom: scales text + trace diagrams within .section via the
+        // --pick-content-zoom CSS custom property, leaving VS Code's chrome untouched.
+        const ZOOM_MIN = 1;
+        const ZOOM_MAX = 3;
+        const ZOOM_STEP = 0.25;
+        let contentZoom = Number(viewState.contentZoom) || ZOOM_MIN;
+
+        function applyZoom(level) {
+            if (!Number.isFinite(level)) {
+                level = ZOOM_MIN;
+            }
+            // Clamp and round to the nearest step to avoid float drift.
+            level = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, level));
+            level = Math.round(level / ZOOM_STEP) * ZOOM_STEP;
+            contentZoom = level;
+
+            document.documentElement.style.setProperty('--pick-content-zoom', String(level));
+
+            const pct = Math.round(level * 100) + '%';
+            if (zoomResetBtn) {
+                zoomResetBtn.textContent = pct;
+                zoomResetBtn.disabled = level === ZOOM_MIN;
+            }
+            if (zoomOutBtn) {
+                zoomOutBtn.disabled = level <= ZOOM_MIN;
+            }
+            if (zoomInBtn) {
+                zoomInBtn.disabled = level >= ZOOM_MAX;
+            }
+
+            viewState = { ...viewState, contentZoom: level };
+            vscode.setState(viewState);
+        }
+
+        if (zoomInBtn) {
+            zoomInBtn.addEventListener('click', () => applyZoom(contentZoom + ZOOM_STEP));
+        }
+        if (zoomOutBtn) {
+            zoomOutBtn.addEventListener('click', () => applyZoom(contentZoom - ZOOM_STEP));
+        }
+        if (zoomResetBtn) {
+            zoomResetBtn.addEventListener('click', () => applyZoom(ZOOM_MIN));
+        }
+
+        // Restore the saved zoom level on load/reload.
+        applyZoom(contentZoom);
+
         // Random placeholder rotation (example temporal properties)
         const placeholders = [
             'e.g., The red light (`r`) is on for zero or more states, and then turns off and remains off in the future.',
