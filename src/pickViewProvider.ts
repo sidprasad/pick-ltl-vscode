@@ -153,6 +153,10 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
           formula: fr.formula,
           wordsIn: fr.examples_in ?? [],
           wordsOut: fr.examples_out ?? [],
+          // title/note carry the "Best match so far" framing when the session
+          // stopped on the no-progress safety valve rather than full convergence.
+          title: fr.title,
+          note: fr.message,
           status,
           historyRenderData
         });
@@ -233,6 +237,15 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
     }
     this.session = await this.backend.nextPair(this.session);
     await this.renderSession();
+  }
+
+  /** How many no-progress pairs the backend should tolerate before surfacing the
+   * best match so far. Read from settings (default 3), floored at 1. */
+  private maxPairsWithoutProgress(): number {
+    const value = vscode.workspace
+      .getConfiguration('pick-ltl')
+      .get<number>('maxPairsWithoutProgress', 3);
+    return Math.max(1, Math.trunc(Number.isFinite(value) ? value : 3));
   }
 
   private readonly preferredModelKey = 'pick.preferredModelId';
@@ -623,8 +636,12 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
         warnings: []
       }));
 
-      this.session = await this.backend.buildCandidates({ prompt, seeds });
-      
+      this.session = await this.backend.buildCandidates({
+        prompt,
+        seeds,
+        max_pairs_without_progress: this.maxPairsWithoutProgress()
+      });
+
       // Check cancellation before sending results
       if (this.cancellationTokenSource?.token.isCancellationRequested) {
         logger.info('Operation cancelled before sending candidates to UI');
@@ -1259,6 +1276,7 @@ export class PickViewProvider implements vscode.WebviewViewProvider {
       this.session = await this.backend.buildCandidates({
         prompt,
         seeds,
+        max_pairs_without_progress: this.maxPairsWithoutProgress(),
         ...(allowedAtomNames.length > 0 ? { allowed_atoms: allowedAtomNames } : {})
       });
       if (replayAccepts.length > 0 || replayRejects.length > 0) {

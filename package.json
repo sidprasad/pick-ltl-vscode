@@ -89,6 +89,12 @@
           "default": true,
           "description": "Show modal dialog when reporting an issue to remind user to paste clipboard content"
         },
+        "pick-ltl.maxPairsWithoutProgress": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "description": "How many consecutive trace pairs that fail to eliminate any candidate to tolerate before PICK stops asking and surfaces the best match so far."
+        },
         "pick-ltl.backend.pythonPath": {
           "type": "string",
           "default": "",

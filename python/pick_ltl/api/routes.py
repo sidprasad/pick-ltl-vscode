@@ -49,7 +49,20 @@ def build_candidates():
         if isinstance(raw_atoms, list) and raw_atoms
         else None
     )
-    session = create_initial_session(prompt, provider, seeds, allowed_atoms=allowed_atoms)
+    # Optional: how many no-progress pairs to tolerate before surfacing the best
+    # match (the extension forwards the `pick-ltl.maxPairsWithoutProgress` setting).
+    raw_max_stale = payload.get("max_pairs_without_progress")
+    try:
+        max_pairs_without_progress = int(raw_max_stale) if raw_max_stale is not None else None
+    except (TypeError, ValueError):
+        max_pairs_without_progress = None
+    session = create_initial_session(
+        prompt,
+        provider,
+        seeds,
+        allowed_atoms=allowed_atoms,
+        max_pairs_without_progress=max_pairs_without_progress,
+    )
     return jsonify(session.to_dict())
 
 

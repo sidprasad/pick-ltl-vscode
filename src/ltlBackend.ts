@@ -85,6 +85,11 @@ export interface SessionState {
   final_result: FinalResult | null;
   exhausted: boolean;
   message: string;
+  /** No-progress safety valve (see python session engine). Carried opaquely
+   * across the round trip; the extension never mutates these directly. */
+  pairs_without_progress?: number;
+  max_pairs_without_progress?: number;
+  last_active_count?: number;
 }
 
 /** Thrown when the sidecar is not reachable (not started / crashed / wrong URL). */
@@ -189,6 +194,9 @@ export class LtlBackend {
     /** Pin the proposition set (refine sends the original atoms so replayed
      * classifications stay valid). Omit on the initial build. */
     allowed_atoms?: string[];
+    /** How many no-progress pairs to tolerate before surfacing the best match
+     * (forwards the `pick-ltl.maxPairsWithoutProgress` setting). */
+    max_pairs_without_progress?: number;
   }): Promise<SessionState> {
     return this.request('/api/candidates/build', args);
   }

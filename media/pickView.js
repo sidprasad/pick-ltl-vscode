@@ -1485,7 +1485,7 @@
                         latestCandidates = message.status.candidateDetails.slice();
                     }
                     if (message.historyRenderData) { lastHistoryRenderData = Object.assign({}, lastHistoryRenderData, message.historyRenderData); }
-                    showFinalResultWithContext(message.formula, message.wordsIn, message.wordsOut, message.status);
+                    showFinalResultWithContext(message.formula, message.wordsIn, message.wordsOut, message.status, message.title, message.note);
                     break;
                 case 'copied':
                     showStatusWithoutCancel('Copied to clipboard');
@@ -2690,7 +2690,7 @@
             wordHistory.insertBefore(notice, historyItems);
         }
 
-        function showFinalResultWithContext(formula, inWords, outWords, status) {
+        function showFinalResultWithContext(formula, inWords, outWords, status, title, note) {
             // Defensive check: if formula is null/undefined, treat as noFormulaFound
             if (!formula) {
                 console.warn('showFinalResultWithContext called with null/undefined formula, redirecting to showNoFormulaFound');
@@ -2709,12 +2709,22 @@
 
             clearHistoryNotice();
 
-            wordPair.innerHTML = '<div style="text-align: center; padding: 20px; background: var(--vscode-editor-background); border: 2px solid var(--pick-accept-color); border-radius: 8px;">' +
-                '<h2 style="margin: 0 0 10px 0; color: var(--pick-accept-color);">Final Formula Selected</h2>' +
-                '<p style="margin: 0; color: var(--vscode-descriptionForeground);">' +
-                'The selected formula is highlighted below. You can copy any candidate you prefer.' +
-                '</p>' +
-                '</div>';
+            // Default framing is full convergence; the no-progress safety valve
+            // passes its own title/note ("Best match so far ...").
+            const heading = title || 'Final Formula Selected';
+            const subtext = note || 'The selected formula is highlighted below. You can copy any candidate you prefer.';
+            const headingEl = document.createElement('h2');
+            headingEl.style.cssText = 'margin: 0 0 10px 0; color: var(--pick-accept-color);';
+            headingEl.textContent = heading;
+            const subtextEl = document.createElement('p');
+            subtextEl.style.cssText = 'margin: 0; color: var(--vscode-descriptionForeground);';
+            subtextEl.textContent = subtext;
+            const banner = document.createElement('div');
+            banner.style.cssText = 'text-align: center; padding: 20px; background: var(--vscode-editor-background); border: 2px solid var(--pick-accept-color); border-radius: 8px;';
+            banner.appendChild(headingEl);
+            banner.appendChild(subtextEl);
+            wordPair.innerHTML = '';
+            wordPair.appendChild(banner);
 
             if (status) {
                 updateCandidatesWithWinner(status.candidateDetails, status.threshold, formula);

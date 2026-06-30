@@ -321,6 +321,7 @@ def create_initial_session(
     provider: dict,
     seeds: list[SeedFormulaResult],
     allowed_atoms: set[str] | None = None,
+    max_pairs_without_progress: int | None = None,
 ) -> SessionState:
     candidates = build_candidates(seeds, allowed_atoms=allowed_atoms)
 
@@ -369,7 +370,7 @@ def create_initial_session(
         mode = "single_candidate"
         message = "We could only get this one."
 
-    return SessionState(
+    session = SessionState(
         prompt=prompt,
         provider=provider,
         seed=primary_seed,
@@ -379,3 +380,6 @@ def create_initial_session(
         mode=mode,
         message=message,
     )
+    if max_pairs_without_progress is not None:
+        session.max_pairs_without_progress = max(1, int(max_pairs_without_progress))
+    return session
