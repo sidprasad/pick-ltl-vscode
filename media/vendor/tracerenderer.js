@@ -66,11 +66,10 @@ var TraceRenderer = (function () {
             return [''];
         }
 
-        var parts = raw.split('\u2003');
-        if (parts.length === 1) {
-            // Fall back to runs of spaces when the em-space separator is unavailable.
-            parts = raw.split(/\s{2,}/);
-        }
+        // Labels join literals with whitespace, and atom literals never contain
+        // internal spaces - so split on any whitespace run (single space, em-space,
+        // or padded) to get one token per variable.
+        var parts = raw.split(/\s+/);
 
         var vars = [];
         for (var i = 0; i < parts.length; i++) {
@@ -100,21 +99,24 @@ var TraceRenderer = (function () {
         marginX: 16,
         marginY: 16,
         prefixFill: '#ffffff',
-        cycleFill: '#f0f4f8',
-        stroke: '#aaa',
+        cycleFill: '#f3f3f3',
+        stroke: '#888',
         strokeW: 1.5,
-        hlStroke: '#d97706',
+        hlStroke: '#333',
         hlWidth: 4,
-        hlFill: '#fff8eb',
-        arrowFill: '#666',
+        hlFill: '#ffffff',
+        arrowFill: '#333',
         tokenGap: 8,
         tokenLineGap: 5,
         tokenLineH: 18,
-        tokenPosText: '#0b4ea2',
-        tokenNegText: '#c05f0e',
+        // Monochrome: trace labels are plain black on white. Negated literals stay
+        // legible via the leading "¬" and a heavier weight (set where tokens are
+        // drawn), not via color.
+        tokenPosText: '#1a1a1a',
+        tokenNegText: '#1a1a1a',
         indexFont: '11px SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
-        indexTextFill: '#667085',
-        currentBadgeFill: '#d97706',
+        indexTextFill: '#666',
+        currentBadgeFill: '#333',
         currentBadgeText: '#ffffff',
         currentBadgeH: 16,
         arcMinD: 28,
@@ -428,5 +430,66 @@ var TraceRenderer = (function () {
         container.appendChild(svg);
     }
 
-    return { render: render };
+    // --- Lasso-string parsing -------------------------------------------------
+    // Mirror of the extension-host parser in src/traceRender.ts. Keeping a copy
+    // here lets the webview render any trace directly from its Spot lasso string
+    // ("p0;p1;cycle{c0;c1}") instead of depending on render data pushed from the
+    // host, which can be missing or stale (e.g. right after a classify or revise).
+    // The two implementations must stay in sync.
+
+    function _stateToLabel(state) {
+        var s = (state || '').trim();
+        if (s === '' || s === '1' || s === 'true') {
+            return '';
+        }
+        return s
+            .split('&')
+            .map(function (part) { return part.trim(); })
+            .filter(function (part) { return part.length > 0; })
+            .map(function (lit) {
+                return lit.charAt(0) === '!' ? '¬' + lit.slice(1).trim() : lit;
+            })
+            .join(' ');
+    }
+
+    /**
+     * Parse a Spot lasso trace string into render data. Returns null when the
+     * string is empty or has no cycle (every ultimately-periodic word has one).
+     * @param {string} word
+     * @returns {{prefix: Array<{label:string}>, cycle: Array<{label:string}>}|null}
+     */
+    function parse(word) {
+        if (typeof word !== 'string' || word.trim().length === 0) {
+            return null;
+        }
+        try {
+            var prefixPart = word;
+            var cyclePart = '';
+            var marker = 'cycle{';
+            var ci = word.indexOf(marker);
+            if (ci >= 0) {
+                prefixPart = word.slice(0, ci);
+                var inner = word.slice(ci + marker.length);
+                var close = inner.lastIndexOf('}');
+                cyclePart = close >= 0 ? inner.slice(0, close) : inner;
+            }
+            var toStates = function (part) {
+                return part
+                    .split(';')
+                    .map(function (s) { return s.trim(); })
+                    .filter(function (s) { return s.length > 0; })
+                    .map(function (s) { return { label: _stateToLabel(s) }; });
+            };
+            var prefix = toStates(prefixPart);
+            var cycle = toStates(cyclePart);
+            if (cycle.length === 0) {
+                return null;
+            }
+            return { prefix: prefix, cycle: cycle };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    return { render: render, parse: parse };
 })();

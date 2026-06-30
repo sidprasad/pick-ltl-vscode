@@ -2241,9 +2241,14 @@
                 actions.appendChild(unsureBtn);
 
                 // Render the trace as an SVG diagram (LTL visualization), above the
-                // editable lasso string. Falls back gracefully if render data is
-                // unavailable or the trace could not be parsed.
-                const rd = lastRenderData ? (side === 'a' ? lastRenderData.word1 : lastRenderData.word2) : null;
+                // editable lasso string. Prefer the host-pushed render data, but fall
+                // back to parsing the lasso string client-side so the diagram still
+                // shows if that data is missing. Falls back to text only when the
+                // trace can't be parsed at all.
+                let rd = lastRenderData ? (side === 'a' ? lastRenderData.word1 : lastRenderData.word2) : null;
+                if (!rd && typeof TraceRenderer !== 'undefined' && TraceRenderer.parse) {
+                    rd = TraceRenderer.parse(word);
+                }
                 let svgShown = false;
                 if (!traceSyntaxMode && rd && typeof TraceRenderer !== 'undefined' && TraceRenderer.render) {
                     const traceDiv = document.createElement('div');
@@ -2440,8 +2445,14 @@
                 historyItem.appendChild(matchInfo.popover);
 
                 // Render the classified trace as an SVG diagram (falls back to the
-                // lasso string shown below if render data is unavailable).
-                const histRender = lastHistoryRenderData && lastHistoryRenderData[item.word];
+                // lasso string shown below if render data is unavailable). Prefer the
+                // render data pushed from the host, but parse the lasso string
+                // client-side when it's missing — that map is keyed by trace string
+                // and isn't always populated for every history word at render time
+                // (e.g. right after a classify or a revise), which otherwise left the
+                // item showing as text instead of a diagram.
+                const histRender = (lastHistoryRenderData && lastHistoryRenderData[item.word])
+                    || (typeof TraceRenderer !== 'undefined' && TraceRenderer.parse ? TraceRenderer.parse(item.word) : null);
                 let svgShownHist = false;
                 if (!traceSyntaxMode && histRender && typeof TraceRenderer !== 'undefined' && TraceRenderer.render) {
                     const histTrace = document.createElement('div');
