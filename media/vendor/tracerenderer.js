@@ -99,7 +99,8 @@ var TraceRenderer = (function () {
         marginX: 16,
         marginY: 16,
         prefixFill: '#ffffff',
-        cycleFill: '#f3f3f3',
+        // Cycle states aren't shaded — the back-edge arc already marks the loop.
+        cycleFill: '#ffffff',
         stroke: '#888',
         strokeW: 1.5,
         hlStroke: '#333',
