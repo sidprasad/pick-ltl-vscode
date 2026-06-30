@@ -5,7 +5,7 @@
   "publisher": "SiddharthaPrasad",
   "icon": "images/icon.png",
   "license": "MIT",
-  "version": "0.3.5",
+  "version": "0.4.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/sidprasad/pick-ltl-vscode"
@@ -88,6 +88,12 @@
           "type": "boolean",
           "default": true,
           "description": "Show modal dialog when reporting an issue to remind user to paste clipboard content"
+        },
+        "pick-ltl.maxPairsWithoutProgress": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "description": "How many consecutive trace pairs that fail to eliminate any candidate to tolerate before PICK stops asking and surfaces the best match so far."
         },
         "pick-ltl.backend.pythonPath": {
           "type": "string",

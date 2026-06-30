@@ -1485,7 +1485,7 @@
                         latestCandidates = message.status.candidateDetails.slice();
                     }
                     if (message.historyRenderData) { lastHistoryRenderData = Object.assign({}, lastHistoryRenderData, message.historyRenderData); }
-                    showFinalResultWithContext(message.formula, message.wordsIn, message.wordsOut, message.status);
+                    showFinalResultWithContext(message.formula, message.wordsIn, message.wordsOut, message.status, message.title, message.note);
                     break;
                 case 'copied':
                     showStatusWithoutCancel('Copied to clipboard');
@@ -1501,7 +1501,7 @@
                     showNoFormulaFound(message.message, message.candidateDetails, message.wordsIn, message.wordsOut, message.wordHistory);
                     break;
                 case 'insufficientWords':
-                    showInsufficientWords(message.candidates, message.status);
+                    showInsufficientWords(message.candidates, message.status, message.message);
                     break;
                 case 'reset':
                     resetUI(message.preserveClassifications);
@@ -1723,7 +1723,7 @@
             statusCancelBtn.classList.add('hidden');
         }
 
-        function showInsufficientWords(candidates, status) {
+        function showInsufficientWords(candidates, status, message) {
             // Clear any existing error messages first
             errorSection.classList.add('hidden');
             clearStatusMessage();
@@ -1739,9 +1739,15 @@
                   '</strong> candidate(s). Eliminated candidates are greyed out below with their downvotes.</p>'
                 : '';
 
+            // Honor a backend-supplied reason (e.g. the no-progress safety valve's
+            // standstill note) instead of always claiming we "ran out of words".
+            const bodyText = (typeof message === 'string' && message.trim().length > 0)
+                ? message
+                : 'The system ran out of distinguishing words to generate.';
+
             wordPair.innerHTML = '<div style="text-align: center; padding: 20px; background: var(--vscode-inputValidation-warningBackground); border: 1px solid var(--vscode-inputValidation-warningBorder); border-radius: 4px;">' +
-                '<h3>Unable to generate more words</h3>' +
-                '<p>The system ran out of distinguishing words to generate.</p>' +
+                '<h3>No more comparisons to show</h3>' +
+                '<p>' + escapeHtml(bodyText) + '</p>' +
                 progressLine +
                 '<p>You can copy any surviving candidate you prefer, or click "Build a New Formula" below to start fresh.</p>' +
                 '</div>';
@@ -2690,7 +2696,7 @@
             wordHistory.insertBefore(notice, historyItems);
         }
 
-        function showFinalResultWithContext(formula, inWords, outWords, status) {
+        function showFinalResultWithContext(formula, inWords, outWords, status, title, note) {
             // Defensive check: if formula is null/undefined, treat as noFormulaFound
             if (!formula) {
                 console.warn('showFinalResultWithContext called with null/undefined formula, redirecting to showNoFormulaFound');
@@ -2709,12 +2715,22 @@
 
             clearHistoryNotice();
 
-            wordPair.innerHTML = '<div style="text-align: center; padding: 20px; background: var(--vscode-editor-background); border: 2px solid var(--pick-accept-color); border-radius: 8px;">' +
-                '<h2 style="margin: 0 0 10px 0; color: var(--pick-accept-color);">Final Formula Selected</h2>' +
-                '<p style="margin: 0; color: var(--vscode-descriptionForeground);">' +
-                'The selected formula is highlighted below. You can copy any candidate you prefer.' +
-                '</p>' +
-                '</div>';
+            // Default framing is full convergence; the no-progress safety valve
+            // passes its own title/note ("Best match so far ...").
+            const heading = title || 'Final Formula Selected';
+            const subtext = note || 'The selected formula is highlighted below. You can copy any candidate you prefer.';
+            const headingEl = document.createElement('h2');
+            headingEl.style.cssText = 'margin: 0 0 10px 0; color: var(--pick-accept-color);';
+            headingEl.textContent = heading;
+            const subtextEl = document.createElement('p');
+            subtextEl.style.cssText = 'margin: 0; color: var(--vscode-descriptionForeground);';
+            subtextEl.textContent = subtext;
+            const banner = document.createElement('div');
+            banner.style.cssText = 'text-align: center; padding: 20px; background: var(--vscode-editor-background); border: 2px solid var(--pick-accept-color); border-radius: 8px;';
+            banner.appendChild(headingEl);
+            banner.appendChild(subtextEl);
+            wordPair.innerHTML = '';
+            wordPair.appendChild(banner);
 
             if (status) {
                 updateCandidatesWithWinner(status.candidateDetails, status.threshold, formula);

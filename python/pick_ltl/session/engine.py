@@ -199,13 +199,51 @@ def _select_distinguishing_pair(
     return by_signature[first], by_signature[second]
 
 
+def _select_best_candidate(session: SessionState) -> CandidateFormulaState | None:
+    """The best-effort pick when we stop without fully converging: the live
+    candidate the user has most *positively confirmed* — most upvotes, breaking
+    ties toward the least-contradicted. Returns None when no surviving candidate
+    has a confirming upvote yet (we won't crown a formula the user never accepted
+    an example for). Falls back to the full pool only if every candidate is
+    already eliminated (shouldn't happen on the staleness path, which runs with
+    >=2 live candidates)."""
+    pool = session.active_candidates() or session.candidate_states
+    confirmed = [c for c in pool if c.positive_votes >= 1]
+    if not confirmed:
+        return None
+    return max(confirmed, key=lambda c: (c.positive_votes, -c.negative_votes))
+
+
+def _note_pair_progress(session: SessionState, active: list[CandidateFormulaState]) -> None:
+    """Update the no-progress counter once per completed pair. A pair is *stale*
+    only when it left the live candidate set exactly as it was — nothing
+    eliminated. Any change resets the streak: an elimination (real progress), but
+    also a reclassify that revives or swaps candidates (a correction, which must
+    not be charged as another stale pair). The first call only seeds the
+    baseline."""
+    signature = sorted(candidate.formula for candidate in active)
+    if session.last_active_signature is None:
+        session.last_active_signature = signature
+        return
+    if signature == session.last_active_signature:
+        session.pairs_without_progress += 1
+    else:
+        session.pairs_without_progress = 0
+    session.last_active_signature = signature
+
+
 def next_pair(session: SessionState) -> SessionState:
     active = session.active_candidates()
+    _note_pair_progress(session, active)
     if len(active) == 0:
         return _set_result(session, "No Candidate Survived", None, "All candidates were eliminated.", "no_result")
 
     if len(active) == 1 and (session.history or len(session.candidate_states) == 1):
         sole = active[0]
+        # Reaching a sole survivor is maximal progress; clear the stale counter so
+        # repeated confirmation pairs (while we solicit an upvote) can't inflate it
+        # and then trip the safety valve if the user later reopens >=2 candidates.
+        session.pairs_without_progress = 0
         if _is_finalizable(sole):
             return _finalize_sole(session, sole)
         # Not yet confirmed: solicit an upvote with a trace the candidate accepts
@@ -227,6 +265,36 @@ def next_pair(session: SessionState) -> SessionState:
             trace2=trace2,
             matches1=_matching_candidates(trace1, active),
             matches2=_matching_candidates(trace2, active),
+        )
+        return session
+
+    # No-progress safety valve. SPOT can almost always hand us *another*
+    # distinguishing pair, so "we ran out of questions" is rarely the thing that
+    # stops us — the real signal is that the answers stopped narrowing the field.
+    # After max_pairs_without_progress completed pairs with no elimination, stop
+    # asking and surface the best match so far rather than looping indefinitely.
+    if session.pairs_without_progress >= session.max_pairs_without_progress:
+        best = _select_best_candidate(session)
+        n = session.pairs_without_progress
+        if best is not None:
+            return _set_result(
+                session,
+                "Best match so far",
+                best,
+                f"We stopped narrowing: the last {n} comparisons ruled nothing out. "
+                "This is the closest match to your answers — accept it, or revise your "
+                "description to keep refining.",
+                "final_result",
+            )
+        # No surviving candidate has a confirming example yet, so there's no
+        # honest "best" to crown. Surface the standstill and let the user add an
+        # accepting trace or pick a candidate.
+        session.exhausted = True
+        session.current_pair = None
+        session.message = (
+            f"We stopped narrowing: the last {n} comparisons ruled nothing out, and no "
+            "candidate has an accepted example yet. Add a trace that should match, or pick "
+            "a candidate below."
         )
         return session
 

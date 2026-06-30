@@ -4,6 +4,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+# After this many *completed* pairs that don't narrow the candidate set (no
+# elimination, no convergence), the session stops asking and surfaces the best
+# match so far. Settable per-session via SessionState.max_pairs_without_progress
+# (the extension exposes it as the `pick-ltl.maxPairsWithoutProgress` setting).
+DEFAULT_MAX_PAIRS_WITHOUT_PROGRESS = 3
+
+
 @dataclass
 class AtomSpec:
     name: str
@@ -197,6 +204,15 @@ class SessionState:
     final_result: FinalResult | None = None
     exhausted: bool = False
     message: str = ""
+    # Staleness tracking for the no-progress safety valve. `pairs_without_progress`
+    # counts consecutive completed pairs that left the live candidate set *exactly*
+    # as it was (nothing eliminated). `last_active_signature` is that set at the
+    # previous pair (None = not yet measured); comparing the whole set — not just
+    # its size — means a reclassify that revives or swaps candidates resets the
+    # streak instead of being miscounted as another stale pair.
+    pairs_without_progress: int = 0
+    max_pairs_without_progress: int = DEFAULT_MAX_PAIRS_WITHOUT_PROGRESS
+    last_active_signature: list[str] | None = None
 
     def active_candidates(self) -> list[CandidateFormulaState]:
         return [candidate for candidate in self.candidate_states if not candidate.eliminated]
@@ -216,6 +232,11 @@ class SessionState:
             "final_result": self.final_result.to_dict() if self.final_result else None,
             "exhausted": self.exhausted,
             "message": self.message,
+            "pairs_without_progress": self.pairs_without_progress,
+            "max_pairs_without_progress": self.max_pairs_without_progress,
+            "last_active_signature": (
+                list(self.last_active_signature) if self.last_active_signature is not None else None
+            ),
         }
 
     @classmethod
@@ -244,4 +265,17 @@ class SessionState:
             final_result=FinalResult.from_dict(result) if isinstance(result, dict) else None,
             exhausted=bool(data.get("exhausted", False)),
             message=str(data.get("message", "")),
+            pairs_without_progress=max(0, int(data.get("pairs_without_progress", 0) or 0)),
+            max_pairs_without_progress=max(
+                1,
+                int(
+                    data.get("max_pairs_without_progress", DEFAULT_MAX_PAIRS_WITHOUT_PROGRESS)
+                    or DEFAULT_MAX_PAIRS_WITHOUT_PROGRESS
+                ),
+            ),
+            last_active_signature=(
+                [str(f) for f in data["last_active_signature"]]
+                if isinstance(data.get("last_active_signature"), list)
+                else None
+            ),
         )

@@ -93,6 +93,17 @@ The webview trace renderer (`media/vendor/tracerenderer.js`) is copied from the 
 
 ---
 
+# Restarting the backend
+
+The Python sidecar starts automatically and is supervised for the life of the VS Code window, but you can bounce it on demand with **PICK LTL: Set Up / Restart Backend** from the Command Palette. The same command serves double duty:
+
+- **If the `pick-ltl` environment already exists**, it does a clean process restart (stop, then start on a fresh localhost port) and reports the new URL. Use this when the backend gets wedged, after you change `pick-ltl.backend.pythonPath` or `pick-ltl.backend.port`, or after updating the env's dependencies.
+- **If no usable environment is found**, it offers to set one up automatically (see [Prerequisites](#prerequisites)).
+
+You can also reach the restart from the error notification PICK shows if the backend fails to start, or by reloading the window (**Developer: Reload Window**), which re-activates the extension and auto-starts the sidecar.
+
+---
+
 # Logs
 
 1. Open View → Output (Ctrl/Cmd + Shift + U).
